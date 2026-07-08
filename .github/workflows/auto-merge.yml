@@ -8,9 +8,6 @@ on:
       - synchronize
       - ready_for_review
       - labeled
-  pull_request_target:
-    types:
-      - labeled
 
 permissions:
   contents: write
