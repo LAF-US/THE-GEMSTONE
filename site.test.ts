@@ -24,12 +24,15 @@ function configLines(text: string): string[] {
 // and each lookup fails loudly if the literal it expects is not found.
 const quartzConfig = fs.readFileSync("quartz.config.ts", "utf8")
 
+// The first capture of `pattern` in quartz.config.ts, or a failed assertion
+// naming `what` so a config edit that moves the literal is noticed at once.
 function configLiteral(pattern: RegExp, what: string): string {
   const match = pattern.exec(quartzConfig)
   assert(match, `could not find ${what} in quartz.config.ts`)
   return match[1]
 }
 
+// The ignorePatterns array the build passes to its content glob.
 function configuredIgnorePatterns(): string[] {
   const literal = configLiteral(/ignorePatterns:\s*(\[[^\]]*\])/, "ignorePatterns")
   return JSON.parse(literal.replace(/'/g, '"').replace(/,\s*\]/, "]"))
