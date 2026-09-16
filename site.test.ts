@@ -19,23 +19,50 @@ function configLines(text: string): string[] {
 }
 
 // quartz.config.ts cannot be imported here: it pulls in every Quartz component
-// and their stylesheets, which only the esbuild pipeline can load. The ignore
-// list is a one-line array literal, so it is read from the source text and the
-// test fails loudly if that ever stops being true.
+// and their stylesheets, which only the esbuild pipeline can load. The values
+// the tests need are short literals, so they are read from the source text,
+// and each lookup fails loudly if the literal it expects is not found.
+const quartzConfig = fs.readFileSync("quartz.config.ts", "utf8")
+
+function configLiteral(pattern: RegExp, what: string): string {
+  const match = pattern.exec(quartzConfig)
+  assert(match, `could not find ${what} in quartz.config.ts`)
+  return match[1]
+}
+
 function configuredIgnorePatterns(): string[] {
-  const source = fs.readFileSync("quartz.config.ts", "utf8")
-  const match = /ignorePatterns:\s*(\[[^\]]*\])/.exec(source)
-  assert(match, "could not find ignorePatterns in quartz.config.ts")
-  return JSON.parse(match[1].replace(/'/g, '"').replace(/,\s*\]/, "]"))
+  const literal = configLiteral(/ignorePatterns:\s*(\[[^\]]*\])/, "ignorePatterns")
+  return JSON.parse(literal.replace(/'/g, '"').replace(/,\s*\]/, "]"))
+}
+
+// Host and optional path prefix the site is served from, as Quartz's baseUrl.
+function configuredBase(): { host: string; prefix: string } {
+  const [host, ...rest] = configLiteral(/baseUrl:\s*"([^"]+)"/, "baseUrl").split("/")
+  return { host, prefix: rest.join("/") }
+}
+
+// Files the configured emitters write regardless of content: the RSS feed and
+// sitemap when ContentIndex enables them, and the 404 page when NotFoundPage
+// is configured. Read from the config so that turning a feed off turns the
+// footer link into a failure here.
+function emitterOutputs(): string[] {
+  const outputs: string[] = []
+  const contentIndex = /Plugin\.ContentIndex\(\{([\s\S]*?)\}\)/.exec(quartzConfig)?.[1] ?? ""
+  if (/enableRSS:\s*true/.test(contentIndex)) {
+    outputs.push(`${/rssSlug:\s*"([^"]+)"/.exec(contentIndex)?.[1] ?? "index"}.xml`)
+  }
+  if (/enableSiteMap:\s*true/.test(contentIndex)) outputs.push("sitemap.xml")
+  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push("404")
+  return outputs
 }
 
 // Every URL the site can serve, as Quartz slugs, derived the way the build
 // derives them: the same glob and ignore patterns, drafts removed, a folder
 // page for every ancestor folder of a published note, assets at their own
-// paths, and the files the emitters in quartz.config.ts always write. Tag
+// paths, and the files the configured emitters always write. Tag
 // pages are not modelled, so a footer link to one fails here and gets looked at.
 async function generatedSlugs(): Promise<Set<string>> {
-  const slugs = new Set<string>(["index.xml", "sitemap.xml", "404"])
+  const slugs = new Set<string>(emitterOutputs())
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
     if (!file.endsWith(".md")) {
       slugs.add(slugifyFilePath(file))
@@ -52,10 +79,21 @@ async function generatedSlugs(): Promise<Set<string>> {
   return slugs
 }
 
+// The slug a footer href addresses on this site. Off-site hosts and paths
+// outside the configured prefix are rejected: the footer promises pages this
+// site generates, not pages that merely exist somewhere.
 function slugOfUrl(href: string): string {
-  const pathname = decodeURIComponent(new URL(href).pathname)
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "")
+  const { host, prefix } = configuredBase()
+  const url = new URL(href, `https://${host}/`)
+  assert.strictEqual(url.host, host, `${href} is not on the configured site ${host}`)
+  let pathname = decodeURIComponent(url.pathname).replace(/^\/+/, "").replace(/\/+$/, "")
+  if (prefix !== "") {
+    assert(
+      pathname === prefix || pathname.startsWith(`${prefix}/`),
+      `${href} is outside /${prefix}`,
+    )
+    pathname = pathname.slice(prefix.length).replace(/^\/+/, "")
+  }
   return pathname === "" ? "index" : pathname
 }
 
