@@ -56,25 +56,37 @@ function emitterOutputs(): string[] {
   return outputs
 }
 
+// Quartz's RemoveDrafts filter drops notes whose frontmatter says draft.
+// The path is one of the build's own glob results under content/, not input,
+// which is why the path-traversal pattern below does not apply.
+function isPublished(file: string): boolean {
+  // nosemgrep: javascript.pathtraversal.rule-non-literal-fs-filename
+  const { draft } = matter(fs.readFileSync(path.join("content", file), "utf8")).data
+  return draft !== true && draft !== "true"
+}
+
+// FolderPage emits a page for every ancestor folder of a published note,
+// except the tags folder, which TagPage owns.
+function folderSlugs(slug: string): string[] {
+  const folders: string[] = []
+  for (let folder = path.dirname(slug); folder !== "."; folder = path.dirname(folder)) {
+    if (folder !== "tags") folders.push(folder)
+  }
+  return folders
+}
+
 // Every URL the site can serve, as Quartz slugs, derived the way the build
 // derives them: the same glob and ignore patterns, drafts removed, a folder
 // page for every ancestor folder of a published note, assets at their own
-// paths, and the files the configured emitters always write. Tag
-// pages are not modelled, so a footer link to one fails here and gets looked at.
+// paths, and the files the configured emitters always write. Tag pages are
+// not modelled, so a footer link to one fails here and gets looked at.
 async function generatedSlugs(): Promise<Set<string>> {
   const slugs = new Set<string>(emitterOutputs())
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
-    if (!file.endsWith(".md")) {
-      slugs.add(slugifyFilePath(file))
-      continue
-    }
-    const { draft } = matter(fs.readFileSync(path.join("content", file), "utf8")).data
-    if (draft === true || draft === "true") continue
+    if (file.endsWith(".md") && !isPublished(file)) continue
     const slug = slugifyFilePath(file)
     slugs.add(slug)
-    for (let folder = path.dirname(slug); folder !== "."; folder = path.dirname(folder)) {
-      if (folder !== "tags") slugs.add(folder)
-    }
+    if (file.endsWith(".md")) folderSlugs(slug).forEach((folder) => slugs.add(folder))
   }
   return slugs
 }
