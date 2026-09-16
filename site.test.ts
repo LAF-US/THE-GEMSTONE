@@ -54,17 +54,23 @@ function configuredBase(): { host: string; prefix: string } {
 }
 
 // Files the configured emitters write regardless of content: the RSS feed and
-// sitemap when ContentIndex enables them, and the 404 page when NotFoundPage
-// is configured. Read from the config so that turning a feed off turns the
-// footer link into a failure here.
+// sitemap unless ContentIndex turns them off, and the 404 page when
+// NotFoundPage is configured. ContentIndex defaults enableSiteMap and
+// enableRSS to true and rssSlug to "index" and merges its options over those
+// defaults, so `Plugin.ContentIndex()` with no options writes both files and
+// only an explicit `false` turns one off. Read from the config so that turning
+// the feed off turns the footer link into a failure here.
 function emitterOutputs(): string[] {
   const outputs: string[] = []
-  const contentIndex = /Plugin\.ContentIndex\(\{([\s\S]*?)\}\)/.exec(quartzConfig)?.[1] ?? ""
-  if (/enableRSS:\s*true/.test(contentIndex)) {
-    outputs.push(`${/rssSlug:\s*"([^"]+)"/.exec(contentIndex)?.[1] ?? "index"}.xml`)
+  const contentIndex = /Plugin\.ContentIndex\((?:\{([\s\S]*?)\})?\)/.exec(quartzConfig)
+  if (contentIndex) {
+    const options = contentIndex[1] ?? ""
+    if (!/enableRSS:\s*false/.test(options)) {
+      outputs.push(`${/rssSlug:\s*"([^"]+)"/.exec(options)?.[1] ?? "index"}.xml`)
+    }
+    if (!/enableSiteMap:\s*false/.test(options)) outputs.push("sitemap.xml")
   }
-  if (/enableSiteMap:\s*true/.test(contentIndex)) outputs.push("sitemap.xml")
-  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push("404")
+  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push("404.html")
   return outputs
 }
 
@@ -131,42 +137,44 @@ function folderSlugs(slug: string): string[] {
   return folders
 }
 
-// Every URL the site can serve, as Quartz slugs, derived the way the build
-// derives them: the same glob and ignore patterns, drafts removed, a folder
-// page for every ancestor folder of a published note, a redirect page for
-// every alias and permalink, a tag page for every tag and the tag index,
-// assets at their own paths, and the files the configured emitters always
-// write.
-async function generatedSlugs(): Promise<Set<string>> {
-  const slugs = new Set<string>(emitterOutputs())
+// Every file the build writes under public/, by its path there, derived the
+// way the emitters derive them: the same glob and ignore patterns, drafts
+// removed, and each emitter's slug plus its extension. ContentPage writes a
+// note at its slug, FolderPage writes every ancestor folder of a published
+// note at the folder's index, TagPage writes every tag and the tag index under
+// tags/, AliasRedirects writes every alias and permalink, Assets copies other
+// files to their slug, and the configured emitters write their fixed files.
+async function generatedFiles(): Promise<Set<string>> {
+  const files = new Set<string>(emitterOutputs())
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
     const slug = slugifyFilePath(file)
     if (!file.endsWith(".md")) {
-      slugs.add(slug)
+      files.add(slug)
       continue
     }
     const data = frontmatterOf(file)
     if (isDraft(data)) continue
     // ContentPage skips nested index notes, which FolderPage renders at the
-    // folder's own slug, and notes under tags/, which only describe a tag page
-    // TagPage renders when some note carries that tag.
-    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) slugs.add(slug)
-    slugs.add("tags")
-    for (const extra of [...folderSlugs(slug), ...aliasSlugs(data, slug), ...tagSlugs(data)]) {
-      slugs.add(extra)
-    }
+    // folder's own index, and notes under tags/, which only describe a tag
+    // page TagPage renders when some note carries that tag.
+    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) files.add(`${slug}.html`)
+    files.add("tags/index.html")
+    for (const folder of folderSlugs(slug)) files.add(`${folder}/index.html`)
+    for (const page of [...aliasSlugs(data, slug), ...tagSlugs(data)]) files.add(`${page}.html`)
   }
-  return slugs
+  return files
 }
 
-// The slug a footer href addresses on this site. Off-site hosts and paths
-// outside the configured prefix are rejected: the footer promises pages this
-// site generates, not pages that merely exist somewhere.
-function slugOfUrl(href: string): string {
+// The path a footer href requests from this site, relative to the configured
+// prefix, without its leading slash and with any trailing slash kept, because
+// GitHub Pages answers `About` and `About/` differently. Off-site hosts and
+// paths outside the prefix are rejected: the footer promises pages this site
+// generates, not pages that merely exist somewhere.
+function requestedPath(href: string): string {
   const { host, prefix } = configuredBase()
   const url = new URL(href, `https://${host}/`)
   assert.strictEqual(url.host, host, `${href} is not on the configured site ${host}`)
-  let pathname = decodeURIComponent(url.pathname).replace(/^\/+/, "").replace(/\/+$/, "")
+  let pathname = decodeURIComponent(url.pathname).replace(/^\/+/, "")
   if (prefix !== "") {
     assert(
       pathname === prefix || pathname.startsWith(`${prefix}/`),
@@ -174,17 +182,30 @@ function slugOfUrl(href: string): string {
     )
     pathname = pathname.slice(prefix.length).replace(/^\/+/, "")
   }
-  return pathname === "" ? "index" : pathname
+  return pathname
+}
+
+// The generated file GitHub Pages serves for a requested path, if any. These
+// are its rules as checked against the live site: a file is served at its own
+// path; `About.html` also answers `About` but not `About/`; `tags/index.html`
+// answers `tags/`, `tags/index.html` and `tags/index`, and `tags` redirects to
+// `tags/`; the empty path is the site root.
+function servedFile(files: Set<string>, requested: string): string | undefined {
+  const candidates =
+    requested === "" || requested.endsWith("/")
+      ? [`${requested}index.html`]
+      : [requested, `${requested}.html`, `${requested}/index.html`]
+  return candidates.find((candidate) => files.has(candidate))
 }
 
 describe("footer", () => {
   test("every footer link points at a page the site generates", async () => {
-    const slugs = await generatedSlugs()
+    const files = await generatedFiles()
     for (const [text, href] of Object.entries(footerLinks)) {
-      const slug = slugOfUrl(href)
+      const requested = requestedPath(href)
       assert(
-        slugs.has(slug),
-        `footer link ${text} -> ${href}: no generated page at "${slug}" (slugs are case-sensitive on GitHub Pages)`,
+        servedFile(files, requested) !== undefined,
+        `footer link ${text} -> ${href}: the site generates nothing that serves "/${requested}" (paths are case-sensitive on GitHub Pages)`,
       )
     }
   })
