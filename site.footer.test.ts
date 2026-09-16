@@ -1,15 +1,12 @@
 // Tests for The Gemstone's footer links against the pages the site generates,
 // as opposed to the Quartz framework under quartz/. Run with `npm test`, which
 // runs from the repository root, so every path below is a literal relative to
-// it. site.config-reader.ts reads the literals it needs from quartz.config.ts,
-// and site.release.test.ts covers the release boundaries.
+// it. site.config-reader.ts reads the values it needs from quartz.config.ts,
+// site.note-reader.ts reads each note as the transformers do, and
+// site.release.test.ts covers the release boundaries.
 import test, { describe } from "node:test"
 import assert from "node:assert"
-import fs from "node:fs"
 import path from "node:path"
-import matter from "gray-matter"
-import yaml from "js-yaml"
-import toml from "toml"
 import {
   configured,
   configuredBase,
@@ -17,17 +14,21 @@ import {
   configuredOptions,
 } from "./site.config-reader"
 import { footerLinks } from "./site.links"
+import {
+  aliasSlugs,
+  frontmatterOf,
+  Frontmatter,
+  inlineTags,
+  published,
+  socialImageOf,
+  tagSlugs,
+} from "./site.note-reader"
 import { glob } from "./quartz/util/glob"
 import {
   FilePath,
   FullSlug,
-  getAllSegmentPrefixes,
-  getFileExtension,
   isAbsoluteURL,
-  isRelativeURL,
   joinSegments,
-  simplifySlug,
-  slugTag,
   slugifyFilePath,
   stripSlashes,
 } from "./quartz/util/path"
@@ -93,84 +94,6 @@ async function assetFiles(): Promise<string[]> {
   return files.map((file) => written(slugifyFilePath(file), ""))
 }
 
-// A note's frontmatter, parsed the way Quartz's FrontMatter transformer
-// parses it: the source trimmed first, as parseMarkdown in
-// quartz/processors/parse.ts trims it before any transformer runs; the same
-// library, with the delimiters and language the transformer is configured
-// with over its defaults; and YAML read with js-yaml's JSON schema, so a
-// value shaped like a date stays the string Quartz sees. With no FrontMatter
-// transformer configured, no note has any. The path is one of the build's
-// own glob results under content/, not input; .codacy.yaml records why this
-// file is outside Opengrep's input-surface rules.
-function frontmatterOf(file: string): Record<string, unknown> {
-  if (!configured("FrontMatter")) return {}
-  const defaults = { delimiters: "---", language: "yaml" }
-  const { delimiters, language } = { ...defaults, ...configuredOptions("FrontMatter") }
-  return matter(fs.readFileSync(path.join("content", file), "utf8").trim(), {
-    delimiters,
-    language,
-    engines: {
-      yaml: (s) => yaml.load(s, { schema: yaml.JSON_SCHEMA }) as object,
-      toml: (s) => toml.parse(s) as object,
-    },
-  }).data
-}
-
-// Whether the configured filters keep a note, as the two filters Quartz
-// ships decide it: RemoveDrafts drops a note whose frontmatter says draft,
-// and ExplicitPublish keeps only a note whose frontmatter says publish.
-function published(data: Record<string, unknown>): boolean {
-  const flag = (key: string) => data[key] === true || data[key] === "true"
-  if (configured("RemoveDrafts") && flag("draft")) return false
-  return !configured("ExplicitPublish") || flag("publish")
-}
-
-// The FrontMatter transformer's reading of a list-valued field, exactly as its
-// coerceToArray does it: the first of the given keys that is set; a string is
-// split on commas with each piece trimmed, while an array is kept as written,
-// surrounding whitespace included; then only strings and numbers survive, as
-// strings. An alias of " Masthead " in an array therefore slugs to -Masthead-.
-function listField(data: Record<string, unknown>, keys: string[]): string[] {
-  const value = keys.map((key) => data[key]).find((v) => v !== undefined && v !== null)
-  if (value === undefined) return []
-  const items: unknown[] = Array.isArray(value)
-    ? value
-    : String(value)
-        .split(",")
-        .map((item) => item.trim())
-  return items.filter((item) => typeof item === "string" || typeof item === "number").map(String)
-}
-
-// The slugs AliasRedirects writes redirect pages at. Each alias is turned into
-// a slug exactly as the FrontMatter transformer's getAliasSlugs does it: the
-// transformer compares getFileExtension(alias), which returns ".md", with
-// "md", so the check never matches and ".md" is always appended, and an alias
-// written as "Legacy.md" ends up at Legacy.md.html. That quirk is reproduced
-// here on purpose; if the transformer changes, this must change with it. The
-// permalink is taken as given, and relative targets are resolved against the
-// note's own slug as AliasRedirects resolves them.
-function aliasSlugs(data: Record<string, unknown>, noteSlug: FullSlug): string[] {
-  const targets: string[] = listField(data, ["aliases", "alias"]).map((alias) =>
-    slugifyFilePath((getFileExtension(alias) === "md" ? alias : `${alias}.md`) as FilePath),
-  )
-  if (data.permalink != null && String(data.permalink) !== "") targets.push(String(data.permalink))
-  return targets.map((target) =>
-    isRelativeURL(target)
-      ? path.normalize(path.join(simplifySlug(noteSlug), "..", target))
-      : target,
-  )
-}
-
-// The tag pages TagPage writes for a note: one per tag and per tag prefix,
-// with tags normalised the way the FrontMatter transformer normalises them
-// and joined under tags/ the way TagPage joins them.
-function tagSlugs(data: Record<string, unknown>): string[] {
-  return listField(data, ["tags", "tag"])
-    .map(slugTag)
-    .flatMap(getAllSegmentPrefixes)
-    .map((tag) => joinSegments("tags", tag))
-}
-
 // The folder pages FolderPage writes for a note: one for every ancestor folder
 // except the tags folder, which TagPage owns, each at the folder's index.
 function folderSlugs(slug: string): string[] {
@@ -187,7 +110,7 @@ function folderSlugs(slug: string): string[] {
 // which only describe a tag page TagPage renders when some note carries that
 // tag. FolderPage writes every ancestor folder, TagPage every tag and tag
 // prefix, and AliasRedirects every alias and permalink.
-function notePages(slug: FullSlug, data: Record<string, unknown>): string[] {
+function notePages(slug: FullSlug, data: Frontmatter): string[] {
   const pages: string[] = []
   const ownPage = !slug.endsWith("/index") && !slug.startsWith("tags/")
   if (configured("ContentPage") && ownPage) pages.push(slug)
@@ -195,17 +118,6 @@ function notePages(slug: FullSlug, data: Record<string, unknown>): string[] {
   if (configured("TagPage")) pages.push(...tagSlugs(data))
   if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
   return pages
-}
-
-// A note's socialImage as the FrontMatter transformer leaves it: set to the
-// first of socialImage, image and cover that is neither undefined nor null
-// when that value is truthy, and otherwise left as written, so an empty
-// string or null stays. CustomOgImages then renders an image only for a note
-// whose socialImage is undefined.
-function socialImageOf(data: Record<string, unknown>): unknown {
-  const keys = ["socialImage", "image", "cover"]
-  const coalesced = keys.map((key) => data[key]).find((v) => v !== undefined && v !== null)
-  return coalesced || data.socialImage
 }
 
 // The files the build writes for one note: none when a filter drops it,
@@ -285,6 +197,23 @@ function servedFile(files: Set<string>, requested: string): string | undefined {
 }
 
 describe("footer", () => {
+  test("tags are read from a note's text as ObsidianFlavoredMarkdown reads them", () => {
+    // Checked against a real build: it writes tags/release.html and
+    // tags/idaho/politics.html for this text and nothing for the rest.
+    const body = [
+      "# Heading #release",
+      "",
+      "Body with #idaho/politics, #2024, `#code` and %% #hidden %%",
+      "",
+      "```",
+      "#fenced",
+      "```",
+      "",
+      "[[Note#section]], https://x.test/#frag and end#notag",
+    ].join("\n")
+    assert.deepStrictEqual(inlineTags(body), ["release", "idaho/politics"])
+  })
+
   test("every footer link points at a page the site generates", async () => {
     const files = await generatedFiles()
     for (const [text, href] of Object.entries(footerLinks)) {

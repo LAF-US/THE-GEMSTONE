@@ -261,10 +261,21 @@ describe("release boundaries", () => {
       "check-yaml",
       "detect-private-key",
     ])
-    const hookIds = lines.flatMap((line) => {
-      const match = /^- id: (\S+)$/.exec(line)
-      return match ? [match[1]] : []
-    })
+    const listed = (key: string) =>
+      lines.flatMap((line) => {
+        const match = new RegExp(`^(?:- )?${key}: (\\S+)$`).exec(line)
+        return match ? [match[1]] : []
+      })
+    // The ids are the read-only checks of the pre-commit-hooks repository, so
+    // every hook must come from there, at a pinned revision: a local hook or
+    // another repository could put a rewriting hook under one of these ids.
+    const repos = listed("repo")
+    assert(repos.length > 0, "no repos found in .pre-commit-config.yaml")
+    for (const repo of repos) {
+      assert.strictEqual(repo, "https://github.com/pre-commit/pre-commit-hooks")
+    }
+    assert.strictEqual(listed("rev").length, repos.length, "every repo needs a pinned rev")
+    const hookIds = listed("id")
     assert(hookIds.length > 0, "no hooks found in .pre-commit-config.yaml")
     for (const id of hookIds) {
       assert(readOnly.has(id), `hook ${id} is not in the read-only set`)
