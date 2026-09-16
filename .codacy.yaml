@@ -7,7 +7,7 @@
 # in the repository, with their reasons.
 #
 # Opengrep's application-security patterns assume untrusted input reaching
-# file, shell or deserialisation calls. site.test.ts is the site's test suite:
+# file, shell or deserialisation calls. site.footer.test.ts is the footer test:
 # it reads a handful of repository files by literal path and walks content/
 # with Quartz's own glob to read each note's frontmatter, the same read the
 # RemoveDrafts filter performs at build time. Those reads are not an input
@@ -16,4 +16,4 @@
 engines:
   opengrep:
     exclude_paths:
-      - "site.test.ts"
+      - "site.footer.test.ts"
