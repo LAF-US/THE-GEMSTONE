@@ -94,17 +94,19 @@ async function assetFiles(): Promise<string[]> {
 }
 
 // A note's frontmatter, parsed the way Quartz's FrontMatter transformer
-// parses it: the same library, the delimiters and language the transformer
-// is configured with over its defaults, and YAML read with js-yaml's JSON
-// schema, so a value shaped like a date stays the string Quartz sees. With
-// no FrontMatter transformer configured, no note has any. The path is one of
-// the build's own glob results under content/, not input; .codacy.yaml
-// records why this file is outside Opengrep's input-surface rules.
+// parses it: the source trimmed first, as parseMarkdown in
+// quartz/processors/parse.ts trims it before any transformer runs; the same
+// library, with the delimiters and language the transformer is configured
+// with over its defaults; and YAML read with js-yaml's JSON schema, so a
+// value shaped like a date stays the string Quartz sees. With no FrontMatter
+// transformer configured, no note has any. The path is one of the build's
+// own glob results under content/, not input; .codacy.yaml records why this
+// file is outside Opengrep's input-surface rules.
 function frontmatterOf(file: string): Record<string, unknown> {
   if (!configured("FrontMatter")) return {}
   const defaults = { delimiters: "---", language: "yaml" }
   const { delimiters, language } = { ...defaults, ...configuredOptions("FrontMatter") }
-  return matter(fs.readFileSync(path.join("content", file)), {
+  return matter(fs.readFileSync(path.join("content", file), "utf8").trim(), {
     delimiters,
     language,
     engines: {
