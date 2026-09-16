@@ -14,9 +14,11 @@ import {
   getAllSegmentPrefixes,
   getFileExtension,
   isRelativeURL,
+  joinSegments,
   simplifySlug,
   slugTag,
   slugifyFilePath,
+  stripSlashes,
 } from "./quartz/util/path"
 
 // Non-empty, non-comment lines of a small config file, trimmed.
@@ -29,9 +31,14 @@ function configLines(text: string): string[] {
 
 // quartz.config.ts cannot be imported here: it pulls in every Quartz component
 // and their stylesheets, which only the esbuild pipeline can load. The values
-// the tests need are short literals, so they are read from the source text,
-// and each lookup fails loudly if the literal it expects is not found.
-const quartzConfig = fs.readFileSync("quartz.config.ts", "utf8")
+// the tests need are short literals, so they are read from the source text
+// with its block comments and comment-only lines removed first, so that an
+// emitter or option commented out of the config is not read as configured;
+// each lookup fails loudly if the literal it expects is not found.
+const quartzConfig = fs
+  .readFileSync("quartz.config.ts", "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "")
 
 // The first capture of `pattern` in quartz.config.ts, or a failed assertion
 // naming `what` so a config edit that moves the literal is noticed at once.
@@ -53,6 +60,14 @@ function configuredBase(): { host: string; prefix: string } {
   return { host, prefix: rest.join("/") }
 }
 
+// The path under public/ at which write() in quartz/plugins/emitters/helpers.ts
+// lands a slug with an extension: it joins the output directory and
+// `slug + ext` with joinSegments, which strips the slashes at either end of
+// each segment, so a permalink of /legacy is written at legacy.html.
+function written(slug: string, ext: string): string {
+  return stripSlashes(slug + ext)
+}
+
 // Files the configured emitters write regardless of content: the RSS feed and
 // sitemap unless ContentIndex turns them off, and the 404 page when
 // NotFoundPage is configured. ContentIndex defaults enableSiteMap and
@@ -66,11 +81,11 @@ function emitterOutputs(): string[] {
   if (contentIndex) {
     const options = contentIndex[1] ?? ""
     if (!/enableRSS:\s*false/.test(options)) {
-      outputs.push(`${/rssSlug:\s*"([^"]+)"/.exec(options)?.[1] ?? "index"}.xml`)
+      outputs.push(written(/rssSlug:\s*"([^"]+)"/.exec(options)?.[1] ?? "index", ".xml"))
     }
-    if (!/enableSiteMap:\s*false/.test(options)) outputs.push("sitemap.xml")
+    if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
   }
-  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push("404.html")
+  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push(written("404", ".html"))
   return outputs
 }
 
@@ -124,20 +139,21 @@ function aliasSlugs(data: Record<string, unknown>, noteSlug: FullSlug): string[]
 }
 
 // The tag pages TagPage writes for a note: one per tag and per tag prefix,
-// with tags normalised the way the FrontMatter transformer normalises them.
+// with tags normalised the way the FrontMatter transformer normalises them
+// and joined under tags/ the way TagPage joins them.
 function tagSlugs(data: Record<string, unknown>): string[] {
   return listField(data, ["tags", "tag"])
     .map(slugTag)
     .flatMap(getAllSegmentPrefixes)
-    .map((tag) => `tags/${tag}`)
+    .map((tag) => joinSegments("tags", tag))
 }
 
-// FolderPage emits a page for every ancestor folder of a published note,
-// except the tags folder, which TagPage owns.
+// The folder pages FolderPage writes for a note: one for every ancestor folder
+// except the tags folder, which TagPage owns, each at the folder's index.
 function folderSlugs(slug: string): string[] {
   const folders: string[] = []
   for (let folder = path.dirname(slug); folder !== "."; folder = path.dirname(folder)) {
-    if (folder !== "tags") folders.push(folder)
+    if (folder !== "tags") folders.push(joinSegments(folder, "index"))
   }
   return folders
 }
@@ -162,10 +178,15 @@ async function generatedFiles(): Promise<Set<string>> {
     // ContentPage skips nested index notes, which FolderPage renders at the
     // folder's own index, and notes under tags/, which only describe a tag
     // page TagPage renders when some note carries that tag.
-    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) files.add(`${slug}.html`)
-    files.add("tags/index.html")
-    for (const folder of folderSlugs(slug)) files.add(`${folder}/index.html`)
-    for (const page of [...aliasSlugs(data, slug), ...tagSlugs(data)]) files.add(`${page}.html`)
+    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) files.add(written(slug, ".html"))
+    for (const page of [
+      joinSegments("tags", "index"),
+      ...folderSlugs(slug),
+      ...aliasSlugs(data, slug),
+      ...tagSlugs(data),
+    ]) {
+      files.add(written(page, ".html"))
+    }
   }
   return files
 }
