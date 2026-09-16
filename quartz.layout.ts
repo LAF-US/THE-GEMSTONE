@@ -9,7 +9,7 @@ export const sharedPageComponents: SharedLayout = {
   footer: Component.Footer({
     links: {
       HOME: "https://thegemstone.org/",
-      ABOUT: "https://thegemstone.org/about",
+      ABOUT: "https://thegemstone.org/About",
       RSS: "https://thegemstone.org/index.xml",
     },
   }),
