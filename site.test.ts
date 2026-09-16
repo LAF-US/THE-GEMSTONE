@@ -57,10 +57,9 @@ function emitterOutputs(): string[] {
 }
 
 // Quartz's RemoveDrafts filter drops notes whose frontmatter says draft.
-// The path is one of the build's own glob results under content/, not input,
-// which is why the path-traversal pattern below does not apply.
+// The path is one of the build's own glob results under content/, not input;
+// .codacy.yaml records why this file is outside Opengrep's input-surface rules.
 function isPublished(file: string): boolean {
-  // nosemgrep: javascript.pathtraversal.rule-non-literal-fs-filename
   const { draft } = matter(fs.readFileSync(path.join("content", file), "utf8")).data
   return draft !== true && draft !== "true"
 }

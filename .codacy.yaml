@@ -1,0 +1,19 @@
+---
+# Codacy configuration for The Gemstone.
+#
+# Codacy reads this file from the default branch, and a pull request that adds
+# or changes it is analysed with its own copy. While the file exists, the
+# "Ignored files" settings in Codacy's UI do not apply; exclusions live here,
+# in the repository, with their reasons.
+#
+# Opengrep's application-security patterns assume untrusted input reaching
+# file, shell or deserialisation calls. site.test.ts is the site's test suite:
+# it reads a handful of repository files by literal path and walks content/
+# with Quartz's own glob to read each note's frontmatter, the same read the
+# RemoveDrafts filter performs at build time. Those reads are not an input
+# surface, so that one file is excluded from Opengrep only. Every other Codacy
+# tool and metric still covers it, and Opengrep still covers all site code.
+engines:
+  opengrep:
+    exclude_paths:
+      - "site.test.ts"
