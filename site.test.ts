@@ -87,15 +87,20 @@ function isDraft(data: Record<string, unknown>): boolean {
   return data.draft === true || data.draft === "true"
 }
 
-// The FrontMatter transformer's reading of a list-valued field: the first of
-// the given keys that is set, as an array of strings, or nothing.
+// The FrontMatter transformer's reading of a list-valued field, exactly as its
+// coerceToArray does it: the first of the given keys that is set; a string is
+// split on commas with each piece trimmed, while an array is kept as written,
+// surrounding whitespace included; then only strings and numbers survive, as
+// strings. An alias of " Masthead " in an array therefore slugs to -Masthead-.
 function listField(data: Record<string, unknown>, keys: string[]): string[] {
   const value = keys.map((key) => data[key]).find((v) => v !== undefined && v !== null)
   if (value === undefined) return []
-  const items = Array.isArray(value) ? value : String(value).split(",")
-  return items
-    .filter((item) => typeof item === "string" || typeof item === "number")
-    .map((item) => String(item).trim())
+  const items: unknown[] = Array.isArray(value)
+    ? value
+    : String(value)
+        .split(",")
+        .map((item) => item.trim())
+  return items.filter((item) => typeof item === "string" || typeof item === "number").map(String)
 }
 
 // The slugs AliasRedirects writes redirect pages at. Each alias is turned into
