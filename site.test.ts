@@ -12,6 +12,7 @@ import {
   FilePath,
   FullSlug,
   getAllSegmentPrefixes,
+  getFileExtension,
   isRelativeURL,
   simplifySlug,
   slugTag,
@@ -91,12 +92,17 @@ function listField(data: Record<string, unknown>, keys: string[]): string[] {
     .map((item) => String(item).trim())
 }
 
-// The slugs AliasRedirects writes redirect pages at: each alias slugified as
-// the FrontMatter transformer does (as a note path), the permalink as given,
-// and relative ones resolved against the note's own slug.
+// The slugs AliasRedirects writes redirect pages at. Each alias is turned into
+// a slug exactly as the FrontMatter transformer's getAliasSlugs does it: the
+// transformer compares getFileExtension(alias), which returns ".md", with
+// "md", so the check never matches and ".md" is always appended, and an alias
+// written as "Legacy.md" ends up at Legacy.md.html. That quirk is reproduced
+// here on purpose; if the transformer changes, this must change with it. The
+// permalink is taken as given, and relative targets are resolved against the
+// note's own slug as AliasRedirects resolves them.
 function aliasSlugs(data: Record<string, unknown>, noteSlug: FullSlug): string[] {
   const targets: string[] = listField(data, ["aliases", "alias"]).map((alias) =>
-    slugifyFilePath((alias.endsWith(".md") ? alias : `${alias}.md`) as FilePath),
+    slugifyFilePath((getFileExtension(alias) === "md" ? alias : `${alias}.md`) as FilePath),
   )
   if (data.permalink != null && String(data.permalink) !== "") targets.push(String(data.permalink))
   return targets.map((target) =>
@@ -141,7 +147,10 @@ async function generatedSlugs(): Promise<Set<string>> {
     }
     const data = frontmatterOf(file)
     if (isDraft(data)) continue
-    slugs.add(slug)
+    // ContentPage skips nested index notes, which FolderPage renders at the
+    // folder's own slug, and notes under tags/, which only describe a tag page
+    // TagPage renders when some note carries that tag.
+    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) slugs.add(slug)
     slugs.add("tags")
     for (const extra of [...folderSlugs(slug), ...aliasSlugs(data, slug), ...tagSlugs(data)]) {
       slugs.add(extra)
