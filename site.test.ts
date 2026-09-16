@@ -5,8 +5,10 @@ import test, { describe } from "node:test"
 import assert from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
+import matter from "gray-matter"
 import { footerLinks } from "./site.links"
-import { FilePath, slugifyFilePath } from "./quartz/util/path"
+import { glob } from "./quartz/util/glob"
+import { slugifyFilePath } from "./quartz/util/path"
 
 // Non-empty, non-comment lines of a small config file, trimmed.
 function configLines(text: string): string[] {
@@ -16,17 +18,35 @@ function configLines(text: string): string[] {
     .filter((line) => line !== "" && !line.startsWith("#"))
 }
 
-// Every URL the site can serve, as Quartz slugs. Content files and folders
-// come from content/; the rest are files the emitters in quartz.config.ts
-// always write.
-function generatedSlugs(): Set<string> {
-  const slugs = new Set<string>(["index.xml", "sitemap.xml"])
-  for (const entry of fs.readdirSync("content", { recursive: true, withFileTypes: true })) {
-    const relPath = path.relative("content", path.join(entry.parentPath, entry.name))
-    if (entry.isDirectory()) {
-      slugs.add(slugifyFilePath(`${relPath}/index.md` as FilePath).replace(/\/index$/, ""))
-    } else {
-      slugs.add(slugifyFilePath(relPath as FilePath))
+// quartz.config.ts cannot be imported here: it pulls in every Quartz component
+// and their stylesheets, which only the esbuild pipeline can load. The ignore
+// list is a one-line array literal, so it is read from the source text and the
+// test fails loudly if that ever stops being true.
+function configuredIgnorePatterns(): string[] {
+  const source = fs.readFileSync("quartz.config.ts", "utf8")
+  const match = /ignorePatterns:\s*(\[[^\]]*\])/.exec(source)
+  assert(match, "could not find ignorePatterns in quartz.config.ts")
+  return JSON.parse(match[1].replace(/'/g, '"').replace(/,\s*\]/, "]"))
+}
+
+// Every URL the site can serve, as Quartz slugs, derived the way the build
+// derives them: the same glob and ignore patterns, drafts removed, a folder
+// page for every ancestor folder of a published note, assets at their own
+// paths, and the files the emitters in quartz.config.ts always write. Tag
+// pages are not modelled, so a footer link to one fails here and gets looked at.
+async function generatedSlugs(): Promise<Set<string>> {
+  const slugs = new Set<string>(["index.xml", "sitemap.xml", "404"])
+  for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
+    if (!file.endsWith(".md")) {
+      slugs.add(slugifyFilePath(file))
+      continue
+    }
+    const { draft } = matter(fs.readFileSync(path.join("content", file), "utf8")).data
+    if (draft === true || draft === "true") continue
+    const slug = slugifyFilePath(file)
+    slugs.add(slug)
+    for (let folder = path.dirname(slug); folder !== "."; folder = path.dirname(folder)) {
+      if (folder !== "tags") slugs.add(folder)
     }
   }
   return slugs
@@ -40,8 +60,8 @@ function slugOfUrl(href: string): string {
 }
 
 describe("footer", () => {
-  test("every footer link points at a page the site generates", () => {
-    const slugs = generatedSlugs()
+  test("every footer link points at a page the site generates", async () => {
+    const slugs = await generatedSlugs()
     for (const [text, href] of Object.entries(footerLinks)) {
       const slug = slugOfUrl(href)
       assert(
