@@ -195,17 +195,28 @@ function notePages(slug: FullSlug, data: Record<string, unknown>): string[] {
   return pages
 }
 
+// A note's socialImage as the FrontMatter transformer leaves it: set to the
+// first of socialImage, image and cover that is neither undefined nor null
+// when that value is truthy, and otherwise left as written, so an empty
+// string or null stays. CustomOgImages then renders an image only for a note
+// whose socialImage is undefined.
+function socialImageOf(data: Record<string, unknown>): unknown {
+  const keys = ["socialImage", "image", "cover"]
+  const coalesced = keys.map((key) => data[key]).find((v) => v !== undefined && v !== null)
+  return coalesced || data.socialImage
+}
+
 // The files the build writes for one note: none when a filter drops it,
-// otherwise its pages and, when CustomOgImages is configured and the note
-// names no image in the keys the FrontMatter transformer coalesces, its
-// social image.
+// otherwise its pages and, when CustomOgImages is configured and the note is
+// left without a socialImage, its social image.
 function noteFiles(file: FilePath): string[] {
   const slug = slugifyFilePath(file)
   const data = frontmatterOf(file)
   if (!published(data)) return []
   const files = notePages(slug, data).map((page) => written(page, ".html"))
-  const socialImage = ["socialImage", "image", "cover"].map((key) => data[key]).find(Boolean)
-  if (configured("CustomOgImages") && !socialImage) files.push(written(`${slug}-og-image`, ".webp"))
+  if (configured("CustomOgImages") && socialImageOf(data) === undefined) {
+    files.push(written(`${slug}-og-image`, ".webp"))
+  }
   return files
 }
 

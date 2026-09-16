@@ -84,26 +84,87 @@ function dockerMatcher(pattern: string): (candidate: string) => boolean {
   return dockerMatch(pattern, kind, source)
 }
 
-// Whether Docker leaves a file out of the build context under a .dockerignore,
-// ported from ReadAll in moby/patternmatcher/ignorefile and
-// MatchesOrParentMatches in moby/patternmatcher: a line starting with # is a
-// comment; each pattern is trimmed, cleaned (so `.git/` and `./.git` mean
-// `.git`) and stripped of one leading slash, and a leading `!` negates it;
-// patterns apply in order, a pattern matches the file or any of its parent
+// The index past one end of a range in a character class at `at`, or -1
+// where getEsc in Go's filepath.Match fails: nothing there, a `-` or `]`
+// there, a backslash with nothing to escape, or nothing after the character.
+function dockerEscEnd(pattern: string, at: number): number {
+  if (at >= pattern.length || "-]".includes(pattern[at])) return -1
+  if (pattern[at] === "\\") at += 1
+  if (at + 1 >= pattern.length) return -1
+  return at + 1
+}
+
+// The index past one range of a character class at `at`: its low end, and
+// its high end after a `-`; or -1 when either is malformed.
+function dockerRangeEnd(pattern: string, at: number): number {
+  const lo = dockerEscEnd(pattern, at)
+  if (lo === -1 || pattern[lo] !== "-") return lo
+  return dockerEscEnd(pattern, lo + 1)
+}
+
+// The index past a character class whose `[` sits before `at`, or -1 when
+// filepath.Match calls it malformed: it may open with `^`, and must hold at
+// least one range before its `]`.
+function dockerClassEnd(pattern: string, at: number): number {
+  if (pattern[at] === "^") at += 1
+  for (let ranges = 0; at !== -1; ranges += 1) {
+    if (pattern[at] === "]" && ranges > 0) return at + 1
+    at = dockerRangeEnd(pattern, at)
+  }
+  return -1
+}
+
+// Whether filepath.Match, which patternmatcher.New runs on every pattern,
+// calls it malformed: a backslash must escape a character, and a character
+// class must be well formed.
+function dockerMalformed(pattern: string): boolean {
+  let at = 0
+  while (at >= 0 && at < pattern.length) {
+    if (pattern[at] === "\\") at += 2
+    else if (pattern[at] === "[") at = dockerClassEnd(pattern, at + 1)
+    else at += 1
+  }
+  return at !== pattern.length
+}
+
+// Why New in moby/patternmatcher would refuse a rule, or nothing: an
+// exclusion with nothing left to exclude, or a malformed pattern.
+function dockerRejection(negated: boolean, pattern: string): string | undefined {
+  if (negated && (pattern === "" || pattern === "/")) return 'illegal exclusion pattern: "!"'
+  if (dockerMalformed(pattern)) return "syntax error in pattern"
+  return undefined
+}
+
+// A rule of a .dockerignore, negated or not, that tells whether a path
+// matches it.
+type DockerRule = { negated: boolean; matches: (candidate: string) => boolean }
+
+// One line of a .dockerignore as a rule, or nothing for a comment or blank
+// line, ported from ReadAll in moby/patternmatcher/ignorefile: the pattern
+// is trimmed, cleaned (so `.git/` and `./.git` mean `.git`) and stripped of
+// one leading slash, and a leading `!` negates it. A rule New would refuse
+// is an error here, since Docker then refuses the whole file.
+function dockerRule(line: string): DockerRule | undefined {
+  if (line.startsWith("#")) return undefined
+  let pattern = line.replace(/\r$/, "").trim()
+  if (pattern === "") return undefined
+  const negated = pattern.startsWith("!")
+  if (negated) pattern = pattern.slice(1).trim()
+  if (pattern !== "") {
+    pattern = path.posix.normalize(pattern).replace(/(?<=.)\/$/, "")
+    if (pattern.length > 1 && pattern.startsWith("/")) pattern = pattern.slice(1)
+  }
+  const rejection = dockerRejection(negated, pattern)
+  if (rejection !== undefined) throw new Error(`${rejection}: ${JSON.stringify(line)}`)
+  return { negated, matches: dockerMatcher(pattern) }
+}
+
+// Whether Docker leaves a file out of the build context under a
+// .dockerignore, as MatchesOrParentMatches in moby/patternmatcher decides:
+// rules apply in order, a rule matches the file or any of its parent
 // directories, and the last one to match decides.
 function dockerIgnores(dockerignore: string, file: string): boolean {
-  const rules = dockerignore.split("\n").flatMap((line) => {
-    if (line.startsWith("#")) return []
-    let pattern = line.replace(/\r$/, "").trim()
-    if (pattern === "") return []
-    const negated = pattern.startsWith("!")
-    if (negated) pattern = pattern.slice(1).trim()
-    if (pattern !== "") {
-      pattern = path.posix.normalize(pattern).replace(/(?<=.)\/$/, "")
-      if (pattern.length > 1 && pattern.startsWith("/")) pattern = pattern.slice(1)
-    }
-    return [{ negated, matches: dockerMatcher(pattern) }]
-  })
+  const rules = dockerignore.split("\n").flatMap((line) => dockerRule(line) ?? [])
   const segments = file.split("/")
   const candidates = segments.map((_, depth) => segments.slice(0, depth + 1).join("/"))
   let matched = false
@@ -148,6 +209,35 @@ describe("release boundaries", () => {
     ]) {
       assert(dockerIgnores(dockerignore, file), `.dockerignore should exclude ${file}`)
     }
+  })
+
+  test("the .dockerignore port refuses the patterns Docker refuses", () => {
+    // Checked against moby's own matcher through Go: New refuses an
+    // exclusion with nothing to exclude, an unescaped trailing backslash and
+    // a character class filepath.Match calls malformed, and a range out of
+    // order fails when the pattern is compiled.
+    const refused = [
+      "!",
+      "! ",
+      "!/",
+      "\\",
+      "a\\",
+      "[abc",
+      "[]a]",
+      "[a-]",
+      "[^]",
+      "[^]a]",
+      "**/[",
+      "a[",
+      "[z-a]",
+    ]
+    for (const pattern of refused) {
+      assert.throws(() => dockerIgnores(pattern, "a"), `Docker refuses ${JSON.stringify(pattern)}`)
+    }
+    // A `!` inside a class and an escaped `]` are ordinary characters.
+    assert(dockerIgnores("[!a]", "a"))
+    assert(!dockerIgnores("[\\]]", "a"))
+    assert(dockerIgnores("[\\]]", "]"))
   })
 
   test(".npmignore ignores everything and package.json is private", () => {
