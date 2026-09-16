@@ -1,12 +1,19 @@
 // Tests for The Gemstone's footer links against the pages the site generates,
 // as opposed to the Quartz framework under quartz/. Run with `npm test`, which
 // runs from the repository root, so every path below is a literal relative to
-// it. site.release.test.ts covers the release boundaries.
+// it. site.config-reader.ts reads the literals it needs from quartz.config.ts,
+// and site.release.test.ts covers the release boundaries.
 import test, { describe } from "node:test"
 import assert from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
 import matter from "gray-matter"
+import {
+  configured,
+  configuredBase,
+  configuredIgnorePatterns,
+  quartzConfig,
+} from "./site.config-reader"
 import { footerLinks } from "./site.links"
 import { glob } from "./quartz/util/glob"
 import {
@@ -23,44 +30,6 @@ import {
   stripSlashes,
 } from "./quartz/util/path"
 
-// quartz.config.ts cannot be imported here: it pulls in every Quartz component
-// and their stylesheets, which only the esbuild pipeline can load. The values
-// the tests need are short literals, so they are read from the source text
-// with its block comments and comment-only lines removed first, so that an
-// emitter or option commented out of the config is not read as configured;
-// each lookup fails loudly if the literal it expects is not found.
-const quartzConfig = fs
-  .readFileSync("quartz.config.ts", "utf8")
-  .replace(/\/\*[\s\S]*?\*\//g, "")
-  .replace(/^\s*\/\/.*$/gm, "")
-
-// The first capture of `pattern` in quartz.config.ts, or a failed assertion
-// naming `what` so a config edit that moves the literal is noticed at once.
-function configLiteral(pattern: RegExp, what: string): string {
-  const match = pattern.exec(quartzConfig)
-  assert(match, `could not find ${what} in quartz.config.ts`)
-  return match[1]
-}
-
-// Whether the config lists a plugin, written as `Plugin.Name(`. Each emitter
-// and filter below contributes to the model only when it is configured, so
-// removing one turns the footer links it served into failures here.
-function configured(plugin: string): boolean {
-  return new RegExp(`Plugin\\.${plugin}\\(`).test(quartzConfig)
-}
-
-// The ignorePatterns array the build passes to its content glob.
-function configuredIgnorePatterns(): string[] {
-  const literal = configLiteral(/ignorePatterns:\s*(\[[^\]]*\])/, "ignorePatterns")
-  return JSON.parse(literal.replace(/'/g, '"').replace(/,\s*\]/, "]"))
-}
-
-// Host and optional path prefix the site is served from, as Quartz's baseUrl.
-function configuredBase(): { host: string; prefix: string } {
-  const [host, ...rest] = configLiteral(/baseUrl:\s*"([^"]+)"/, "baseUrl").split("/")
-  return { host, prefix: rest.join("/") }
-}
-
 // The path under public/ at which write() in quartz/plugins/emitters/helpers.ts
 // lands a slug with an extension: it joins the output directory and
 // `slug + ext` with joinSegments, which strips the slashes at either end of
@@ -71,9 +40,10 @@ function written(slug: string, ext: string): string {
 
 // Files the configured emitters write regardless of content: the RSS feed and
 // sitemap unless ContentIndex turns them off, its content index always, the
-// 404 page when NotFoundPage is configured, the favicon, and the site
-// stylesheet and scripts. ContentIndex defaults enableSiteMap and enableRSS to
-// true and rssSlug to "index" and merges its options over those defaults, so
+// 404 page when NotFoundPage is configured, the favicon, the CNAME file when
+// that emitter is configured with a base URL, and the site stylesheet and
+// scripts. ContentIndex defaults enableSiteMap and enableRSS to true and
+// rssSlug to "index" and merges its options over those defaults, so
 // `Plugin.ContentIndex()` with no options writes both files and only an
 // explicit `false` turns one off. Read from the config so that turning the
 // feed off turns the footer link into a failure here.
@@ -90,6 +60,7 @@ function emitterOutputs(): string[] {
   }
   if (configured("NotFoundPage")) outputs.push(written("404", ".html"))
   if (configured("Favicon")) outputs.push(written("favicon", ".ico"))
+  if (configured("CNAME") && configuredBase().host !== "") outputs.push(written("CNAME", ""))
   // Fonts that ComponentResources caches from Google when cdnCaching is off
   // are fetched at build time and are not modelled.
   if (configured("ComponentResources")) {
