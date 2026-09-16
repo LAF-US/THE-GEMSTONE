@@ -73,11 +73,14 @@ export function configured(plugin: string): boolean {
 // The ignorePatterns array the build passes to its content glob.
 export function configuredIgnorePatterns(): string[] {
   const literal = configLiteral(/ignorePatterns:\s*(\[[^\]]*\])/, "ignorePatterns")
-  return JSON.parse(literal.replace(/'/g, '"').replace(/,\s*\]/, "]"))
+  return JSON.parse(literal.replaceAll("'", '"').replace(/,\s*\]/, "]"))
 }
 
 // Host and optional path prefix the site is served from, as Quartz's baseUrl.
+// The quotes in the pattern are written \x22: Lizard, which Codacy runs on
+// this file, reads a bare quote inside a regex literal as the start of a
+// string and misreads every function after it.
 export function configuredBase(): { host: string; prefix: string } {
-  const [host, ...rest] = configLiteral(/baseUrl:\s*"([^"]+)"/, "baseUrl").split("/")
+  const [host, ...rest] = configLiteral(/baseUrl:\s*\x22([^\x22]+)\x22/, "baseUrl").split("/")
   return { host, prefix: rest.join("/") }
 }

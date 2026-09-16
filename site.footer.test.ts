@@ -38,26 +38,33 @@ function written(slug: string, ext: string): string {
   return stripSlashes(slug + ext)
 }
 
-// Files the configured emitters write regardless of content: the RSS feed and
-// sitemap unless ContentIndex turns them off, its content index always, the
-// 404 page when NotFoundPage is configured, the favicon, the CNAME file when
-// that emitter is configured with a base URL, and the site stylesheet and
-// scripts. ContentIndex defaults enableSiteMap and enableRSS to true and
-// rssSlug to "index" and merges its options over those defaults, so
+// The files ContentIndex writes: its content index always, and the RSS feed
+// and sitemap unless turned off. It defaults enableSiteMap and enableRSS to
+// true and rssSlug to "index" and merges its options over those defaults, so
 // `Plugin.ContentIndex()` with no options writes both files and only an
 // explicit `false` turns one off. Read from the config so that turning the
 // feed off turns the footer link into a failure here.
-function emitterOutputs(): string[] {
-  const outputs: string[] = []
+function contentIndexOutputs(): string[] {
   const contentIndex = /Plugin\.ContentIndex\((?:\{([\s\S]*?)\})?\)/.exec(quartzConfig)
-  if (contentIndex) {
-    const options = contentIndex[1] ?? ""
-    if (!/enableRSS:\s*false/.test(options)) {
-      outputs.push(written(/rssSlug:\s*"([^"]+)"/.exec(options)?.[1] ?? "index", ".xml"))
-    }
-    if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
-    outputs.push(written(joinSegments("static", "contentIndex"), ".json"))
+  if (!contentIndex) return []
+  const options = contentIndex[1] ?? ""
+  const outputs = [written(joinSegments("static", "contentIndex"), ".json")]
+  if (!/enableRSS:\s*false/.test(options)) {
+    // The quotes in the pattern are written \x22 for the reason given at
+    // configuredBase in site.config-reader.ts.
+    const rssSlug = /rssSlug:\s*\x22([^\x22]+)\x22/.exec(options)
+    outputs.push(written(rssSlug ? rssSlug[1] : "index", ".xml"))
   }
+  if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
+  return outputs
+}
+
+// Files the configured emitters write regardless of content: ContentIndex's
+// files, the 404 page when NotFoundPage is configured, the favicon, the CNAME
+// file when that emitter is configured with a base URL, and the site
+// stylesheet and scripts.
+function emitterOutputs(): string[] {
+  const outputs = contentIndexOutputs()
   if (configured("NotFoundPage")) outputs.push(written("404", ".html"))
   if (configured("Favicon")) outputs.push(written("favicon", ".ico"))
   if (configured("CNAME") && configuredBase().host !== "") outputs.push(written("CNAME", ""))
@@ -78,6 +85,15 @@ async function staticFiles(): Promise<string[]> {
   if (!configured("Static")) return []
   const files = await glob("**", path.join("quartz", "static"), configuredIgnorePatterns())
   return files.map((file) => written(joinSegments("static", file), ""))
+}
+
+// The files Assets copies to their slug: every non-Markdown file under
+// content/, with or without an extension, globbed the way assets.ts globs
+// them; the build's own glob in generatedFiles takes only files with one.
+async function assetFiles(): Promise<string[]> {
+  if (!configured("Assets")) return []
+  const files = await glob("**", "content", ["**/*.md", ...configuredIgnorePatterns()])
+  return files.map((file) => written(slugifyFilePath(file), ""))
 }
 
 // A note's frontmatter, parsed by the same library Quartz's FrontMatter
@@ -149,49 +165,47 @@ function folderSlugs(slug: string): string[] {
   return folders
 }
 
+// The pages the page emitters write for one published note, by slug.
+// ContentPage writes the note at its own slug, skipping nested index notes,
+// which FolderPage renders at the folder's own index, and notes under tags/,
+// which only describe a tag page TagPage renders when some note carries that
+// tag. FolderPage writes every ancestor folder, TagPage every tag and tag
+// prefix, and AliasRedirects every alias and permalink.
+function notePages(slug: FullSlug, data: Record<string, unknown>): string[] {
+  const pages: string[] = []
+  const ownPage = !slug.endsWith("/index") && !slug.startsWith("tags/")
+  if (configured("ContentPage") && ownPage) pages.push(slug)
+  if (configured("FolderPage")) pages.push(...folderSlugs(slug))
+  if (configured("TagPage")) pages.push(...tagSlugs(data))
+  if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
+  return pages
+}
+
+// The files the build writes for one note: none when RemoveDrafts drops it,
+// otherwise its pages and, when CustomOgImages is configured and the note
+// names no image in the keys the FrontMatter transformer coalesces, its
+// social image.
+function noteFiles(file: FilePath): string[] {
+  const slug = slugifyFilePath(file)
+  const data = frontmatterOf(file)
+  if (configured("RemoveDrafts") && isDraft(data)) return []
+  const files = notePages(slug, data).map((page) => written(page, ".html"))
+  const socialImage = ["socialImage", "image", "cover"].map((key) => data[key]).find(Boolean)
+  if (configured("CustomOgImages") && !socialImage) files.push(written(`${slug}-og-image`, ".webp"))
+  return files
+}
+
 // Every file the build writes under public/, by its path there, derived the
-// way the configured emitters derive them: the same glob and ignore patterns,
-// drafts removed when RemoveDrafts is configured, and each emitter's slug plus
-// its extension. ContentPage writes a note at its slug, FolderPage writes
-// every ancestor folder of a published note at the folder's index, TagPage
-// writes every tag and the tag index under tags/, AliasRedirects writes every
-// alias and permalink, Assets copies other files to their slug, CustomOgImages
-// renders a social image per note, Static copies quartz/static, and the other
-// emitters write their fixed files.
+// way the configured emitters derive them: the same glob and ignore patterns
+// as the build, and each emitter's slug plus its extension.
 async function generatedFiles(): Promise<Set<string>> {
-  const files = new Set<string>([...emitterOutputs(), ...(await staticFiles())])
-  const ignorePatterns = configuredIgnorePatterns()
-  // Assets globs every non-Markdown file, with or without an extension, the
-  // way assets.ts does; the build's own glob below takes only files with one.
-  if (configured("Assets")) {
-    for (const file of await glob("**", "content", ["**/*.md", ...ignorePatterns])) {
-      files.add(written(slugifyFilePath(file), ""))
-    }
-  }
+  const files = new Set([...emitterOutputs(), ...(await staticFiles()), ...(await assetFiles())])
   // TagPage always writes the tag index: computeTagInfo adds the base tag
   // whether or not any note survives the filters.
   if (configured("TagPage")) files.add(written(joinSegments("tags", "index"), ".html"))
-  for (const file of await glob("**/*.*", "content", ignorePatterns)) {
+  for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
     if (!file.endsWith(".md")) continue
-    const slug = slugifyFilePath(file)
-    const data = frontmatterOf(file)
-    if (configured("RemoveDrafts") && isDraft(data)) continue
-    const pages: string[] = []
-    // ContentPage skips nested index notes, which FolderPage renders at the
-    // folder's own index, and notes under tags/, which only describe a tag
-    // page TagPage renders when some note carries that tag.
-    if (configured("ContentPage") && !slug.endsWith("/index") && !slug.startsWith("tags/")) {
-      pages.push(slug)
-    }
-    if (configured("FolderPage")) pages.push(...folderSlugs(slug))
-    if (configured("TagPage")) pages.push(...tagSlugs(data))
-    if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
-    for (const page of pages) files.add(written(page, ".html"))
-    // CustomOgImages renders an image for every note that does not name its
-    // own, read from the same keys the FrontMatter transformer coalesces.
-    const socialImage = ["socialImage", "image", "cover"].map((key) => data[key]).find(Boolean)
-    if (configured("CustomOgImages") && !socialImage)
-      files.add(written(`${slug}-og-image`, ".webp"))
+    for (const output of noteFiles(file)) files.add(output)
   }
   return files
 }
