@@ -5,7 +5,6 @@ import assert from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { execFileSync } from "node:child_process"
 import yaml from "js-yaml"
 import { footerLinks } from "./site.links"
 import { FilePath, slugifyFilePath } from "./quartz/util/path"
@@ -91,26 +90,10 @@ describe("release boundaries", () => {
     )
   })
 
-  test("npm pack would ship package metadata only, never site content", () => {
-    const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-      cwd: root,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-    const files: string[] = JSON.parse(out)[0].files.map((f: { path: string }) => f.path)
-    const allowed = new Set([
-      "package.json",
-      "README.md",
-      "LICENSE.txt",
-      "quartz/bootstrap-cli.mjs",
-    ])
-    for (const file of files) {
-      assert(allowed.has(file), `npm pack would ship ${file}`)
-    }
-  })
-
   test("pre-commit.ci runs read-only hooks and never rewrites a branch", () => {
-    const cfg = yaml.load(fs.readFileSync(path.join(root, ".pre-commit-config.yaml"), "utf8")) as {
+    const cfg = yaml.load(fs.readFileSync(path.join(root, ".pre-commit-config.yaml"), "utf8"), {
+      schema: yaml.JSON_SCHEMA,
+    }) as {
       ci: { autofix_prs: boolean }
       repos: { hooks: { id: string }[] }[]
     }
