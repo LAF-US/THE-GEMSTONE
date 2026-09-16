@@ -13,6 +13,7 @@ import {
   FullSlug,
   getAllSegmentPrefixes,
   getFileExtension,
+  isAbsoluteURL,
   isRelativeURL,
   joinSegments,
   simplifySlug,
@@ -46,6 +47,13 @@ function configLiteral(pattern: RegExp, what: string): string {
   const match = pattern.exec(quartzConfig)
   assert(match, `could not find ${what} in quartz.config.ts`)
   return match[1]
+}
+
+// Whether the config lists a plugin, written as `Plugin.Name(`. Each emitter
+// and filter below contributes to the model only when it is configured, so
+// removing one turns the footer links it served into failures here.
+function configured(plugin: string): boolean {
+  return new RegExp(`Plugin\\.${plugin}\\(`).test(quartzConfig)
 }
 
 // The ignorePatterns array the build passes to its content glob.
@@ -85,7 +93,7 @@ function emitterOutputs(): string[] {
     }
     if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
   }
-  if (/Plugin\.NotFoundPage\(/.test(quartzConfig)) outputs.push(written("404", ".html"))
+  if (configured("NotFoundPage")) outputs.push(written("404", ".html"))
   return outputs
 }
 
@@ -159,44 +167,51 @@ function folderSlugs(slug: string): string[] {
 }
 
 // Every file the build writes under public/, by its path there, derived the
-// way the emitters derive them: the same glob and ignore patterns, drafts
-// removed, and each emitter's slug plus its extension. ContentPage writes a
-// note at its slug, FolderPage writes every ancestor folder of a published
-// note at the folder's index, TagPage writes every tag and the tag index under
-// tags/, AliasRedirects writes every alias and permalink, Assets copies other
-// files to their slug, and the configured emitters write their fixed files.
+// way the configured emitters derive them: the same glob and ignore patterns,
+// drafts removed when RemoveDrafts is configured, and each emitter's slug plus
+// its extension. ContentPage writes a note at its slug, FolderPage writes
+// every ancestor folder of a published note at the folder's index, TagPage
+// writes every tag and the tag index under tags/, AliasRedirects writes every
+// alias and permalink, Assets copies other files to their slug, and
+// ContentIndex and NotFoundPage write their fixed files.
 async function generatedFiles(): Promise<Set<string>> {
   const files = new Set<string>(emitterOutputs())
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
     const slug = slugifyFilePath(file)
     if (!file.endsWith(".md")) {
-      files.add(slug)
+      if (configured("Assets")) files.add(written(slug, ""))
       continue
     }
     const data = frontmatterOf(file)
-    if (isDraft(data)) continue
+    if (configured("RemoveDrafts") && isDraft(data)) continue
+    const pages: string[] = []
     // ContentPage skips nested index notes, which FolderPage renders at the
     // folder's own index, and notes under tags/, which only describe a tag
     // page TagPage renders when some note carries that tag.
-    if (!slug.endsWith("/index") && !slug.startsWith("tags/")) files.add(written(slug, ".html"))
-    for (const page of [
-      joinSegments("tags", "index"),
-      ...folderSlugs(slug),
-      ...aliasSlugs(data, slug),
-      ...tagSlugs(data),
-    ]) {
-      files.add(written(page, ".html"))
+    if (configured("ContentPage") && !slug.endsWith("/index") && !slug.startsWith("tags/")) {
+      pages.push(slug)
     }
+    if (configured("FolderPage")) pages.push(...folderSlugs(slug))
+    if (configured("TagPage")) pages.push(joinSegments("tags", "index"), ...tagSlugs(data))
+    if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
+    for (const page of pages) files.add(written(page, ".html"))
   }
   return files
 }
 
 // The path a footer href requests from this site, relative to the configured
 // prefix, without its leading slash and with any trailing slash kept, because
-// GitHub Pages answers `About` and `About/` differently. Off-site hosts and
-// paths outside the prefix are rejected: the footer promises pages this site
-// generates, not pages that merely exist somewhere.
+// GitHub Pages answers `About` and `About/` differently. Footer.tsx renders
+// each href unchanged on every page, so a relative href such as `About` or
+// `./About` would resolve against whichever page it is on; only an absolute
+// URL or a root-relative path means the same thing everywhere. Off-site hosts
+// and paths outside the prefix are rejected: the footer promises pages this
+// site generates, not pages that merely exist somewhere.
 function requestedPath(href: string): string {
+  assert(
+    isAbsoluteURL(href) || href.startsWith("/"),
+    `${href} is neither an absolute URL nor a root-relative path, so it would point somewhere different on each page`,
+  )
   const { host, prefix } = configuredBase()
   const url = new URL(href, `https://${host}/`)
   assert.strictEqual(url.host, host, `${href} is not on the configured site ${host}`)
