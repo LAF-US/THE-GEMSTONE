@@ -13,3 +13,6 @@
 *.ttf filter=lfs diff=lfs merge=lfs -text
 *.woff filter=lfs diff=lfs merge=lfs -text
 *.woff2 filter=lfs diff=lfs merge=lfs -text
+
+# Framework assets stay plain blobs: the site must build without git-lfs and upstream merges must stay clean.
+quartz/static/*.png -filter -diff -merge -text
