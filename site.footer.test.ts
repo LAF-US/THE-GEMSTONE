@@ -177,6 +177,9 @@ async function generatedFiles(): Promise<Set<string>> {
       files.add(written(slugifyFilePath(file), ""))
     }
   }
+  // TagPage always writes the tag index: computeTagInfo adds the base tag
+  // whether or not any note survives the filters.
+  if (configured("TagPage")) files.add(written(joinSegments("tags", "index"), ".html"))
   for (const file of await glob("**/*.*", "content", ignorePatterns)) {
     if (!file.endsWith(".md")) continue
     const slug = slugifyFilePath(file)
@@ -190,7 +193,7 @@ async function generatedFiles(): Promise<Set<string>> {
       pages.push(slug)
     }
     if (configured("FolderPage")) pages.push(...folderSlugs(slug))
-    if (configured("TagPage")) pages.push(joinSegments("tags", "index"), ...tagSlugs(data))
+    if (configured("TagPage")) pages.push(...tagSlugs(data))
     if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
     for (const page of pages) files.add(written(page, ".html"))
   }

@@ -117,10 +117,28 @@ function dockerIgnores(dockerignore: string, file: string): boolean {
 describe("release boundaries", () => {
   test(".dockerignore keeps git history for page dates and drops local state", () => {
     const dockerignore = fs.readFileSync(".dockerignore", "utf8")
-    assert(
-      !dockerIgnores(dockerignore, ".git/HEAD"),
-      "CreatedModifiedDate reads page dates from git; .git must stay in the Docker context",
-    )
+    // CreatedModifiedDate opens the repository with @napi-rs/simple-git and
+    // walks the commit history for each note, which needs the whole layout git
+    // documents in gitrepository-layout(5), not HEAD alone: the config, the
+    // refs and packed refs, loose and packed objects, and the shallow file a
+    // CI checkout leaves. A partial exclusion such as `.git/objects`, or
+    // `.git/*` with `!.git/HEAD`, would find a repository it cannot read.
+    for (const file of [
+      ".git/HEAD",
+      ".git/config",
+      ".git/packed-refs",
+      ".git/shallow",
+      ".git/refs/heads/main",
+      ".git/refs/tags/v4.5.2",
+      ".git/objects/pack/pack-0.pack",
+      ".git/objects/pack/pack-0.idx",
+      ".git/objects/ab/cdef",
+    ]) {
+      assert(
+        !dockerIgnores(dockerignore, file),
+        `CreatedModifiedDate reads page dates from git; ${file} must stay in the Docker context`,
+      )
+    }
     for (const file of [".npmrc", "node_modules/preact/package.json", "public/index.html"]) {
       assert(dockerIgnores(dockerignore, file), `.dockerignore should exclude ${file}`)
     }
