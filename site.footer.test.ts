@@ -70,12 +70,13 @@ function written(slug: string, ext: string): string {
 }
 
 // Files the configured emitters write regardless of content: the RSS feed and
-// sitemap unless ContentIndex turns them off, and the 404 page when
-// NotFoundPage is configured. ContentIndex defaults enableSiteMap and
-// enableRSS to true and rssSlug to "index" and merges its options over those
-// defaults, so `Plugin.ContentIndex()` with no options writes both files and
-// only an explicit `false` turns one off. Read from the config so that turning
-// the feed off turns the footer link into a failure here.
+// sitemap unless ContentIndex turns them off, its content index always, the
+// 404 page when NotFoundPage is configured, the favicon, and the site
+// stylesheet and scripts. ContentIndex defaults enableSiteMap and enableRSS to
+// true and rssSlug to "index" and merges its options over those defaults, so
+// `Plugin.ContentIndex()` with no options writes both files and only an
+// explicit `false` turns one off. Read from the config so that turning the
+// feed off turns the footer link into a failure here.
 function emitterOutputs(): string[] {
   const outputs: string[] = []
   const contentIndex = /Plugin\.ContentIndex\((?:\{([\s\S]*?)\})?\)/.exec(quartzConfig)
@@ -85,9 +86,27 @@ function emitterOutputs(): string[] {
       outputs.push(written(/rssSlug:\s*"([^"]+)"/.exec(options)?.[1] ?? "index", ".xml"))
     }
     if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
+    outputs.push(written(joinSegments("static", "contentIndex"), ".json"))
   }
   if (configured("NotFoundPage")) outputs.push(written("404", ".html"))
+  if (configured("Favicon")) outputs.push(written("favicon", ".ico"))
+  // Fonts that ComponentResources caches from Google when cdnCaching is off
+  // are fetched at build time and are not modelled.
+  if (configured("ComponentResources")) {
+    outputs.push(
+      written("index", ".css"),
+      written("prescript", ".js"),
+      written("postscript", ".js"),
+    )
+  }
   return outputs
+}
+
+// The files Static copies from quartz/static to static/, with the same glob.
+async function staticFiles(): Promise<string[]> {
+  if (!configured("Static")) return []
+  const files = await glob("**", path.join("quartz", "static"), configuredIgnorePatterns())
+  return files.map((file) => written(joinSegments("static", file), ""))
 }
 
 // A note's frontmatter, parsed by the same library Quartz's FrontMatter
@@ -165,10 +184,11 @@ function folderSlugs(slug: string): string[] {
 // its extension. ContentPage writes a note at its slug, FolderPage writes
 // every ancestor folder of a published note at the folder's index, TagPage
 // writes every tag and the tag index under tags/, AliasRedirects writes every
-// alias and permalink, Assets copies other files to their slug, and
-// ContentIndex and NotFoundPage write their fixed files.
+// alias and permalink, Assets copies other files to their slug, CustomOgImages
+// renders a social image per note, Static copies quartz/static, and the other
+// emitters write their fixed files.
 async function generatedFiles(): Promise<Set<string>> {
-  const files = new Set<string>(emitterOutputs())
+  const files = new Set<string>([...emitterOutputs(), ...(await staticFiles())])
   const ignorePatterns = configuredIgnorePatterns()
   // Assets globs every non-Markdown file, with or without an extension, the
   // way assets.ts does; the build's own glob below takes only files with one.
@@ -196,6 +216,11 @@ async function generatedFiles(): Promise<Set<string>> {
     if (configured("TagPage")) pages.push(...tagSlugs(data))
     if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
     for (const page of pages) files.add(written(page, ".html"))
+    // CustomOgImages renders an image for every note that does not name its
+    // own, read from the same keys the FrontMatter transformer coalesces.
+    const socialImage = ["socialImage", "image", "cover"].map((key) => data[key]).find(Boolean)
+    if (configured("CustomOgImages") && !socialImage)
+      files.add(written(`${slug}-og-image`, ".webp"))
   }
   return files
 }
