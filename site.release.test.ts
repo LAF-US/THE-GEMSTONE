@@ -15,64 +15,73 @@ function configLines(text: string): string[] {
     .filter((line) => line !== "" && !line.startsWith("#"))
 }
 
+// How Docker ends up matching a .dockerignore pattern, as Pattern.compile in
+// moby/patternmatcher detects it while turning the pattern into a regex: a
+// pattern without wildcards is compared for equality, one ending in `**` as a
+// prefix, one starting with `**` as a suffix, and any other by the regex.
+type DockerMatchKind = "exact" | "prefix" | "suffix" | "regexp"
+
+// One token of a pattern, read at `at`: how many characters it takes, the
+// regex it contributes, and the match kind the pattern has after it.
+type DockerToken = { length: number; source: string; kind: DockerMatchKind }
+
+// A `**` read at `at`: a following slash is eaten with it; at the end of the
+// pattern it makes a wildcard-free pattern a prefix match and otherwise adds
+// `.*`; elsewhere it spans any number of directories.
+function dockerDoubleStar(pattern: string, at: number, kind: DockerMatchKind): DockerToken {
+  const length = pattern[at + 2] === "/" ? 3 : 2
+  if (at + length < pattern.length) return { length, source: "(.*/)?", kind: "regexp" }
+  if (kind === "exact") return { length, source: "", kind: "prefix" }
+  return { length, source: ".*", kind: "regexp" }
+}
+
+// The token at `at`: `*` and `?` stay within one directory, `[` and `]` pass
+// through as a character class, `\` escapes the next character, and any other
+// character is literal. Docker escapes exactly `.+()|{}$` before compiling
+// the regex; `^` is not among them, which is what lets `[^...]` negate a class.
+function dockerToken(pattern: string, at: number, kind: DockerMatchKind): DockerToken {
+  const ch = pattern[at]
+  if (pattern.startsWith("**", at)) return dockerDoubleStar(pattern, at, kind)
+  if (ch === "*") return { length: 1, source: "[^/]*", kind: "regexp" }
+  if (ch === "?") return { length: 1, source: "[^/]", kind: "regexp" }
+  if (ch === "\\" && at + 1 < pattern.length) {
+    return { length: 2, source: `\\${pattern[at + 1]}`, kind: "regexp" }
+  }
+  if ("[]".includes(ch)) return { length: 1, source: ch, kind: "regexp" }
+  return { length: 1, source: ch.replace(/[.+()|{}$\\]/, "\\$&"), kind }
+}
+
+// The test Pattern.match applies for a compiled pattern of the given kind.
+function dockerMatch(
+  pattern: string,
+  kind: DockerMatchKind,
+  source: string,
+): (candidate: string) => boolean {
+  if (kind === "exact") return (candidate) => candidate === pattern
+  if (kind === "prefix") return (candidate) => candidate.startsWith(pattern.slice(0, -2))
+  if (kind === "suffix") {
+    const suffix = pattern.slice(2)
+    return (candidate) =>
+      candidate.endsWith(suffix) || (suffix.startsWith("/") && candidate === suffix.slice(1))
+  }
+  const regex = new RegExp(`${source}$`)
+  return (candidate) => regex.test(candidate)
+}
+
 // One .dockerignore pattern as Docker matches it, ported from Pattern.compile
-// and Pattern.match in moby/patternmatcher: a pattern without wildcards must
-// equal the path; `**` at the end matches any path with the rest as a prefix;
-// `**` at the start matches any path with the rest as a suffix; otherwise `**`
-// spans directories, `*` and `?` stay within one, `[...]` is a character class
-// and `\` escapes the next character.
+// and Pattern.match in moby/patternmatcher: the pattern is read token by
+// token into a regex while the match kind is tracked, with a leading `**`
+// always making a suffix match, and the kind decides the test applied.
 function dockerMatcher(pattern: string): (candidate: string) => boolean {
   let source = "^"
-  let kind: "exact" | "prefix" | "suffix" | "regexp" = "exact"
-  for (let at = 0, first = true; at < pattern.length; first = false) {
-    const ch = pattern[at++]
-    if (ch === "*" && pattern[at] === "*") {
-      at++
-      if (pattern[at] === "/") at++
-      if (at >= pattern.length) {
-        if (kind === "exact") kind = "prefix"
-        else {
-          source += ".*"
-          kind = "regexp"
-        }
-      } else {
-        source += "(.*/)?"
-        kind = "regexp"
-      }
-      if (first) kind = "suffix"
-    } else if (ch === "*") {
-      source += "[^/]*"
-      kind = "regexp"
-    } else if (ch === "?") {
-      source += "[^/]"
-      kind = "regexp"
-    } else if (ch === "\\" && at < pattern.length) {
-      source += `\\${pattern[at++]}`
-      kind = "regexp"
-    } else if (ch === "[" || ch === "]") {
-      source += ch
-      kind = "regexp"
-    } else {
-      // Docker escapes exactly these before compiling the regex; `^` is not
-      // among them, which is what lets `[^...]` negate a character class.
-      source += ch.replace(/[.+()|{}$\\]/, "\\$&")
-    }
+  let kind: DockerMatchKind = "exact"
+  for (let at = 0; at < pattern.length; ) {
+    const token = dockerToken(pattern, at, kind)
+    source += token.source
+    kind = at === 0 && pattern.startsWith("**") ? "suffix" : token.kind
+    at += token.length
   }
-  switch (kind) {
-    case "exact":
-      return (candidate) => candidate === pattern
-    case "prefix":
-      return (candidate) => candidate.startsWith(pattern.slice(0, -2))
-    case "suffix": {
-      const suffix = pattern.slice(2)
-      return (candidate) =>
-        candidate.endsWith(suffix) || (suffix.startsWith("/") && candidate === suffix.slice(1))
-    }
-    default: {
-      const regex = new RegExp(`${source}$`)
-      return (candidate) => regex.test(candidate)
-    }
-  }
+  return dockerMatch(pattern, kind, source)
 }
 
 // Whether Docker leaves a file out of the build context under a .dockerignore,

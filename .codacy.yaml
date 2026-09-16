@@ -7,13 +7,17 @@
 # in the repository, with their reasons.
 #
 # Opengrep's application-security patterns assume untrusted input reaching
-# file, shell or deserialisation calls. site.footer.test.ts is the footer test:
-# it reads a handful of repository files by literal path and walks content/
-# with Quartz's own glob to read each note's frontmatter, the same read the
-# RemoveDrafts filter performs at build time. Those reads are not an input
-# surface, so that one file is excluded from Opengrep only. Every other Codacy
-# tool and metric still covers it, and Opengrep still covers all site code.
+# file, shell, regex or deserialisation calls. The two site test files are not
+# an input surface: site.footer.test.ts reads a handful of repository files by
+# literal path and walks content/ with Quartz's own glob to read each note's
+# frontmatter, the same read the RemoveDrafts filter performs at build time;
+# site.release.test.ts compiles the patterns of the repository's own
+# .dockerignore into a regex, as Docker itself does, to check what leaves the
+# build context. Those two files are excluded from Opengrep only. Every other
+# Codacy tool and metric still covers them, and Opengrep still covers all site
+# code.
 engines:
   opengrep:
     exclude_paths:
       - "site.footer.test.ts"
+      - "site.release.test.ts"
