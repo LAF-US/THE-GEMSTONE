@@ -122,28 +122,30 @@ const tagRegex = /(?<=^| )#((?:[-_\p{L}\p{Emoji}\p{M}\d])+(?:\/[-_\p{L}\p{Emoji}
 // A Markdown syntax tree node, as far as reading its text nodes needs.
 type Tree = { type: string; value?: string; children?: Tree[] }
 
-// The tags in the text nodes of a tree, as ObsidianFlavoredMarkdown finds
-// them with mdastFindReplace: a tag of digits and slashes only is skipped,
-// and the rest are slugged.
-function textTags(node: Tree, tags: string[]): void {
-  if (node.type === "text") {
+// The tags in the text nodes of a tree, and in its raw HTML nodes when
+// asked, as ObsidianFlavoredMarkdown finds them with mdastFindReplace: a tag
+// of digits and slashes only is skipped, and the rest are slugged.
+function textTags(node: Tree, tags: string[], inHtml: boolean): void {
+  if (node.type === "text" || (inHtml && node.type === "html")) {
     for (const match of String(node.value).matchAll(tagRegex)) {
       if (!/^[\/\d]+$/.test(match[1])) tags.push(slugTag(match[1]))
     }
   }
-  for (const child of node.children ?? []) textTags(child, tags)
+  for (const child of node.children ?? []) textTags(child, tags, inHtml)
 }
 
 // The tags ObsidianFlavoredMarkdown adds to a note's frontmatter from its
 // body, already through the text transform, when it is configured with
 // parseTags on, its default: every tag in a text node of the Markdown parsed
-// as Quartz parses it, so code and link targets do not count.
+// as Quartz parses it, so code and link targets do not count, and, with
+// enableInHtmlEmbed on, every tag in a raw HTML node as well.
 export function inlineTags(body: string): string[] {
   if (!configured("ObsidianFlavoredMarkdown")) return []
-  const options = { parseTags: true, ...configuredOptions("ObsidianFlavoredMarkdown") }
+  const defaults = { parseTags: true, enableInHtmlEmbed: false }
+  const options = { ...defaults, ...configuredOptions("ObsidianFlavoredMarkdown") }
   if (!options.parseTags) return []
   const tags: string[] = []
-  textTags(unified().use(remarkParse).parse(body) as Tree, tags)
+  textTags(unified().use(remarkParse).parse(body) as Tree, tags, Boolean(options.enableInHtmlEmbed))
   return tags
 }
 

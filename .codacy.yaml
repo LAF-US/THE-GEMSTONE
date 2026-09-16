@@ -7,15 +7,16 @@
 # in the repository, with their reasons.
 #
 # Opengrep's application-security patterns assume untrusted input reaching
-# file, shell, regex or deserialisation calls. Two site test files are not an
-# input surface: site.note-reader.ts reads each note that Quartz's own glob
-# finds under content/, the same read the RemoveDrafts filter and TagPage
-# perform at build time, for site.footer.test.ts; site.release.test.ts
-# compiles the patterns of the repository's own .dockerignore into a regex, as
-# Docker itself does, to check what leaves the build context, and builds the
-# regex that reads its own pre-commit config. Those two files are excluded
-# from Opengrep only. Every other Codacy tool and metric still covers them,
-# and Opengrep still covers all other site code.
+# file, shell, regex or deserialisation calls. Two files that read for the
+# site tests are not an input surface: site.note-reader.ts, a support module
+# for site.footer.test.ts, reads each note that Quartz's own glob finds under
+# content/, the same read the RemoveDrafts filter and TagPage perform at
+# build time; site.release.test.ts compiles the patterns of the repository's
+# own .dockerignore into a regex, as Docker itself does, to check what leaves
+# the build context, and builds the regex that reads its own pre-commit
+# config. Those two files are excluded from Opengrep only. Every other Codacy
+# tool and metric still covers them, and Opengrep still covers all other site
+# code.
 engines:
   opengrep:
     exclude_paths:
