@@ -8,7 +8,15 @@ import path from "node:path"
 import matter from "gray-matter"
 import { footerLinks } from "./site.links"
 import { glob } from "./quartz/util/glob"
-import { slugifyFilePath } from "./quartz/util/path"
+import {
+  FilePath,
+  FullSlug,
+  getAllSegmentPrefixes,
+  isRelativeURL,
+  simplifySlug,
+  slugTag,
+  slugifyFilePath,
+} from "./quartz/util/path"
 
 // Non-empty, non-comment lines of a small config file, trimmed.
 function configLines(text: string): string[] {
@@ -59,12 +67,52 @@ function emitterOutputs(): string[] {
   return outputs
 }
 
+// A note's frontmatter, parsed by the same library Quartz's FrontMatter
+// transformer uses. The path is one of the build's own glob results under
+// content/, not input; .codacy.yaml records why this file is outside
+// Opengrep's input-surface rules.
+function frontmatterOf(file: string): Record<string, unknown> {
+  return matter(fs.readFileSync(path.join("content", file), "utf8")).data
+}
+
 // Quartz's RemoveDrafts filter drops notes whose frontmatter says draft.
-// The path is one of the build's own glob results under content/, not input;
-// .codacy.yaml records why this file is outside Opengrep's input-surface rules.
-function isPublished(file: string): boolean {
-  const { draft } = matter(fs.readFileSync(path.join("content", file), "utf8")).data
-  return draft !== true && draft !== "true"
+function isDraft(data: Record<string, unknown>): boolean {
+  return data.draft === true || data.draft === "true"
+}
+
+// The FrontMatter transformer's reading of a list-valued field: the first of
+// the given keys that is set, as an array of strings, or nothing.
+function listField(data: Record<string, unknown>, keys: string[]): string[] {
+  const value = keys.map((key) => data[key]).find((v) => v !== undefined && v !== null)
+  if (value === undefined) return []
+  const items = Array.isArray(value) ? value : String(value).split(",")
+  return items
+    .filter((item) => typeof item === "string" || typeof item === "number")
+    .map((item) => String(item).trim())
+}
+
+// The slugs AliasRedirects writes redirect pages at: each alias slugified as
+// the FrontMatter transformer does (as a note path), the permalink as given,
+// and relative ones resolved against the note's own slug.
+function aliasSlugs(data: Record<string, unknown>, noteSlug: FullSlug): string[] {
+  const targets: string[] = listField(data, ["aliases", "alias"]).map((alias) =>
+    slugifyFilePath((alias.endsWith(".md") ? alias : `${alias}.md`) as FilePath),
+  )
+  if (data.permalink != null && String(data.permalink) !== "") targets.push(String(data.permalink))
+  return targets.map((target) =>
+    isRelativeURL(target)
+      ? path.normalize(path.join(simplifySlug(noteSlug), "..", target))
+      : target,
+  )
+}
+
+// The tag pages TagPage writes for a note: one per tag and per tag prefix,
+// with tags normalised the way the FrontMatter transformer normalises them.
+function tagSlugs(data: Record<string, unknown>): string[] {
+  return listField(data, ["tags", "tag"])
+    .map(slugTag)
+    .flatMap(getAllSegmentPrefixes)
+    .map((tag) => `tags/${tag}`)
 }
 
 // FolderPage emits a page for every ancestor folder of a published note,
@@ -79,16 +127,25 @@ function folderSlugs(slug: string): string[] {
 
 // Every URL the site can serve, as Quartz slugs, derived the way the build
 // derives them: the same glob and ignore patterns, drafts removed, a folder
-// page for every ancestor folder of a published note, assets at their own
-// paths, and the files the configured emitters always write. Tag pages are
-// not modelled, so a footer link to one fails here and gets looked at.
+// page for every ancestor folder of a published note, a redirect page for
+// every alias and permalink, a tag page for every tag and the tag index,
+// assets at their own paths, and the files the configured emitters always
+// write.
 async function generatedSlugs(): Promise<Set<string>> {
   const slugs = new Set<string>(emitterOutputs())
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
-    if (file.endsWith(".md") && !isPublished(file)) continue
     const slug = slugifyFilePath(file)
+    if (!file.endsWith(".md")) {
+      slugs.add(slug)
+      continue
+    }
+    const data = frontmatterOf(file)
+    if (isDraft(data)) continue
     slugs.add(slug)
-    if (file.endsWith(".md")) folderSlugs(slug).forEach((folder) => slugs.add(folder))
+    slugs.add("tags")
+    for (const extra of [...folderSlugs(slug), ...aliasSlugs(data, slug), ...tagSlugs(data)]) {
+      slugs.add(extra)
+    }
   }
   return slugs
 }
