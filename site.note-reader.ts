@@ -4,6 +4,7 @@
 // emitters derive from them. Every path is one of the build's own glob
 // results under content/, not input; .codacy.yaml records why this file is
 // outside Opengrep's input-surface rules.
+import assert from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
 import matter from "gray-matter"
@@ -22,20 +23,73 @@ import {
   simplifySlug,
   slugTag,
   slugifyFilePath,
+  splitAnchor,
 } from "./quartz/util/path"
 
 export type Frontmatter = Record<string, unknown>
 
+// ObsidianFlavoredMarkdown's text-level patterns, copied from ofm.ts, which
+// cannot be imported here: it loads scripts and styles only esbuild can.
+const commentRegex = /%%[\s\S]*?%%/g
+const calloutLineRegex = /^> *\[\!\w+\|?.*?\][+-]?.*$/gm
+const wikilinkRegex = /!?\[\[([^\[\]\|\#\\]+)?(#+[^\[\]\|\#\\]+)?(\\?\|[^\[\]\#]*)?\]\]/g
+const tableRegex = /^\|([^\n])+\|\n(\|)( ?:?-{3,}:? ?\|)+\n(\|([^\n])+\|\n?)+/gm
+const tableWikilinkRegex = /(!?\[\[[^\]]*?\]\]|\[\^[^\]]*?\])/g
+const externalLinkRegex = /^https?:\/\//i
+
+// A wikilink inside a table as the text transform escapes it: its `#`, and
+// any `|` not already escaped.
+function escapedInTable(_value: string, raw = ""): string {
+  return raw.replace("#", "\\#").replace(/((^|[^\\])(\\\\)*)\|/g, "$1\\|")
+}
+
+// A wikilink as the text transform rewrites it: its anchor slugged, a block
+// reference kept, its alias or heading shown, and an external target turned
+// into a Markdown link.
+function rewrittenWikilink(value: string, rawFp = "", rawHeader = "", rawAlias?: string): string {
+  const [fp, anchor] = splitAnchor(rawFp + rawHeader)
+  const blockRef = rawHeader.startsWith("#^") ? "^" : ""
+  const displayAnchor = anchor ? `#${blockRef}${anchor.trim().replace(/^#+/, "")}` : ""
+  const displayAlias = rawAlias ?? rawHeader.replace("#", "|")
+  const embedDisplay = value.startsWith("!") ? "!" : ""
+  if (externalLinkRegex.test(rawFp)) {
+    return `${embedDisplay}[${displayAlias.replace(/^\|/, "")}](${rawFp})`
+  }
+  return `${embedDisplay}[[${fp}${displayAnchor}${displayAlias}]]`
+}
+
+// A note's source as ObsidianFlavoredMarkdown's textTransform leaves it,
+// which parseMarkdown applies to the whole note, frontmatter included,
+// before anything parses it: comments removed, a callout title given its own
+// line, and wikilinks normalised, each when its option is on, as all are by
+// default. OxHugoFlavouredMarkdown's text transform is not mirrored.
+export function textTransformed(source: string): string {
+  assert(!configured("OxHugoFlavouredMarkdown"), "OxHugoFlavouredMarkdown is not mirrored")
+  if (!configured("ObsidianFlavoredMarkdown")) return source
+  const defaults = { comments: true, callouts: true, wikilinks: true }
+  const options = { ...defaults, ...configuredOptions("ObsidianFlavoredMarkdown") }
+  let text = source
+  if (options.comments) text = text.replace(commentRegex, "")
+  if (options.callouts) text = text.replace(calloutLineRegex, (line) => `${line}\n> `)
+  if (options.wikilinks) {
+    text = text.replace(tableRegex, (table) => table.replace(tableWikilinkRegex, escapedInTable))
+    text = text.replace(wikilinkRegex, rewrittenWikilink)
+  }
+  return text
+}
+
 // A note's frontmatter and body, parsed the way the FrontMatter transformer
 // parses them: the source trimmed first, as parseMarkdown in
-// quartz/processors/parse.ts trims it before any transformer runs; the same
+// quartz/processors/parse.ts trims it before any transformer runs, and then
+// through the text transform, as parseMarkdown applies it next; the same
 // library, with the delimiters and language the transformer is configured
 // with over its defaults; and YAML read with js-yaml's JSON schema, so a
 // value shaped like a date stays the string Quartz sees.
 function parsedNote(file: FilePath): { data: Frontmatter; content: string } {
   const defaults = { delimiters: "---", language: "yaml" }
   const { delimiters, language } = { ...defaults, ...configuredOptions("FrontMatter") }
-  return matter(fs.readFileSync(path.join("content", file), "utf8").trim(), {
+  const source = textTransformed(fs.readFileSync(path.join("content", file), "utf8").trim())
+  return matter(source, {
     delimiters,
     language,
     engines: {
@@ -81,19 +135,15 @@ function textTags(node: Tree, tags: string[]): void {
 }
 
 // The tags ObsidianFlavoredMarkdown adds to a note's frontmatter from its
-// body when it is configured with parseTags on, its default: every tag in a
-// text node of the Markdown parsed as Quartz parses it, so code and link
-// targets do not count. Comments are removed first when that option is on,
-// as its textTransform removes them; its other text transforms neither add
-// nor remove a tag.
+// body, already through the text transform, when it is configured with
+// parseTags on, its default: every tag in a text node of the Markdown parsed
+// as Quartz parses it, so code and link targets do not count.
 export function inlineTags(body: string): string[] {
   if (!configured("ObsidianFlavoredMarkdown")) return []
-  const defaults = { comments: true, parseTags: true }
-  const options = { ...defaults, ...configuredOptions("ObsidianFlavoredMarkdown") }
+  const options = { parseTags: true, ...configuredOptions("ObsidianFlavoredMarkdown") }
   if (!options.parseTags) return []
-  const source = options.comments ? body.replace(/%%[\s\S]*?%%/g, "") : body
   const tags: string[] = []
-  textTags(unified().use(remarkParse).parse(source) as Tree, tags)
+  textTags(unified().use(remarkParse).parse(body) as Tree, tags)
   return tags
 }
 

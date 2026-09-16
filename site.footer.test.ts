@@ -22,6 +22,7 @@ import {
   published,
   socialImageOf,
   tagSlugs,
+  textTransformed,
 } from "./site.note-reader"
 import { glob } from "./quartz/util/glob"
 import {
@@ -197,20 +198,34 @@ function servedFile(files: Set<string>, requested: string): string | undefined {
 }
 
 describe("footer", () => {
+  test("a note's text is transformed as ObsidianFlavoredMarkdown transforms it", () => {
+    // Checked against a real build: with this frontmatter RemoveDrafts drops
+    // the note, because the comment is gone before the frontmatter is read.
+    assert.strictEqual(textTransformed('draft: "%% explanation %%true"'), 'draft: "true"')
+    assert.strictEqual(textTransformed("> [!note] Title\ntext"), "> [!note] Title\n> \ntext")
+    assert.strictEqual(textTransformed("[[Note#My Heading|shown]]"), "[[Note#my-heading|shown]]")
+    assert.strictEqual(
+      textTransformed("![[https://x.test/a.png|alt]]"),
+      "![alt](https://x.test/a.png)",
+    )
+  })
+
   test("tags are read from a note's text as ObsidianFlavoredMarkdown reads them", () => {
     // Checked against a real build: it writes tags/release.html and
     // tags/idaho/politics.html for this text and nothing for the rest.
-    const body = [
-      "# Heading #release",
-      "",
-      "Body with #idaho/politics, #2024, `#code` and %% #hidden %%",
-      "",
-      "```",
-      "#fenced",
-      "```",
-      "",
-      "[[Note#section]], https://x.test/#frag and end#notag",
-    ].join("\n")
+    const body = textTransformed(
+      [
+        "# Heading #release",
+        "",
+        "Body with #idaho/politics, #2024, `#code` and %% #hidden %%",
+        "",
+        "```",
+        "#fenced",
+        "```",
+        "",
+        "[[Note#section]], https://x.test/#frag and end#notag",
+      ].join("\n"),
+    )
     assert.deepStrictEqual(inlineTags(body), ["release", "idaho/politics"])
   })
 
