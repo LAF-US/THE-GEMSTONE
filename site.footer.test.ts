@@ -8,11 +8,13 @@ import assert from "node:assert"
 import fs from "node:fs"
 import path from "node:path"
 import matter from "gray-matter"
+import yaml from "js-yaml"
+import toml from "toml"
 import {
   configured,
   configuredBase,
   configuredIgnorePatterns,
-  quartzConfig,
+  configuredOptions,
 } from "./site.config-reader"
 import { footerLinks } from "./site.links"
 import { glob } from "./quartz/util/glob"
@@ -39,23 +41,18 @@ function written(slug: string, ext: string): string {
 }
 
 // The files ContentIndex writes: its content index always, and the RSS feed
-// and sitemap unless turned off. It defaults enableSiteMap and enableRSS to
-// true and rssSlug to "index" and merges its options over those defaults, so
-// `Plugin.ContentIndex()` with no options writes both files and only an
-// explicit `false` turns one off. Read from the config so that turning the
-// feed off turns the footer link into a failure here.
+// and sitemap unless turned off. Its options are merged over its defaults
+// the way the emitter merges them, so `Plugin.ContentIndex()` with no
+// options writes both files and only an explicit `false` turns one off. Read
+// from the config so that turning the feed off turns the footer link into a
+// failure here.
 function contentIndexOutputs(): string[] {
-  const contentIndex = /Plugin\.ContentIndex\((?:\{([\s\S]*?)\})?\)/.exec(quartzConfig)
-  if (!contentIndex) return []
-  const options = contentIndex[1] ?? ""
+  if (!configured("ContentIndex")) return []
+  const defaults = { enableSiteMap: true, enableRSS: true, rssSlug: "index" }
+  const options = { ...defaults, ...configuredOptions("ContentIndex") }
   const outputs = [written(joinSegments("static", "contentIndex"), ".json")]
-  if (!/enableRSS:\s*false/.test(options)) {
-    // The quotes in the pattern are written \x22 for the reason given at
-    // configuredBase in site.config-reader.ts.
-    const rssSlug = /rssSlug:\s*\x22([^\x22]+)\x22/.exec(options)
-    outputs.push(written(rssSlug ? rssSlug[1] : "index", ".xml"))
-  }
-  if (!/enableSiteMap:\s*false/.test(options)) outputs.push(written("sitemap", ".xml"))
+  if (options.enableRSS) outputs.push(written(String(options.rssSlug), ".xml"))
+  if (options.enableSiteMap) outputs.push(written("sitemap", ".xml"))
   return outputs
 }
 
@@ -96,17 +93,34 @@ async function assetFiles(): Promise<string[]> {
   return files.map((file) => written(slugifyFilePath(file), ""))
 }
 
-// A note's frontmatter, parsed by the same library Quartz's FrontMatter
-// transformer uses. The path is one of the build's own glob results under
-// content/, not input; .codacy.yaml records why this file is outside
-// Opengrep's input-surface rules.
+// A note's frontmatter, parsed the way Quartz's FrontMatter transformer
+// parses it: the same library, the delimiters and language the transformer
+// is configured with over its defaults, and YAML read with js-yaml's JSON
+// schema, so a value shaped like a date stays the string Quartz sees. With
+// no FrontMatter transformer configured, no note has any. The path is one of
+// the build's own glob results under content/, not input; .codacy.yaml
+// records why this file is outside Opengrep's input-surface rules.
 function frontmatterOf(file: string): Record<string, unknown> {
-  return matter(fs.readFileSync(path.join("content", file), "utf8")).data
+  if (!configured("FrontMatter")) return {}
+  const defaults = { delimiters: "---", language: "yaml" }
+  const { delimiters, language } = { ...defaults, ...configuredOptions("FrontMatter") }
+  return matter(fs.readFileSync(path.join("content", file)), {
+    delimiters,
+    language,
+    engines: {
+      yaml: (s) => yaml.load(s, { schema: yaml.JSON_SCHEMA }) as object,
+      toml: (s) => toml.parse(s) as object,
+    },
+  }).data
 }
 
-// Quartz's RemoveDrafts filter drops notes whose frontmatter says draft.
-function isDraft(data: Record<string, unknown>): boolean {
-  return data.draft === true || data.draft === "true"
+// Whether the configured filters keep a note, as the two filters Quartz
+// ships decide it: RemoveDrafts drops a note whose frontmatter says draft,
+// and ExplicitPublish keeps only a note whose frontmatter says publish.
+function published(data: Record<string, unknown>): boolean {
+  const flag = (key: string) => data[key] === true || data[key] === "true"
+  if (configured("RemoveDrafts") && flag("draft")) return false
+  return !configured("ExplicitPublish") || flag("publish")
 }
 
 // The FrontMatter transformer's reading of a list-valued field, exactly as its
@@ -181,14 +195,14 @@ function notePages(slug: FullSlug, data: Record<string, unknown>): string[] {
   return pages
 }
 
-// The files the build writes for one note: none when RemoveDrafts drops it,
+// The files the build writes for one note: none when a filter drops it,
 // otherwise its pages and, when CustomOgImages is configured and the note
 // names no image in the keys the FrontMatter transformer coalesces, its
 // social image.
 function noteFiles(file: FilePath): string[] {
   const slug = slugifyFilePath(file)
   const data = frontmatterOf(file)
-  if (configured("RemoveDrafts") && isDraft(data)) return []
+  if (!published(data)) return []
   const files = notePages(slug, data).map((page) => written(page, ".html"))
   const socialImage = ["socialImage", "image", "cover"].map((key) => data[key]).find(Boolean)
   if (configured("CustomOgImages") && !socialImage) files.push(written(`${slug}-og-image`, ".webp"))
@@ -197,7 +211,7 @@ function noteFiles(file: FilePath): string[] {
 
 // Every file the build writes under public/, by its path there, derived the
 // way the configured emitters derive them: the same glob and ignore patterns
-// as the build, and each emitter's slug plus its extension.
+// as the build, the same filters, and each emitter's slug plus its extension.
 async function generatedFiles(): Promise<Set<string>> {
   const files = new Set([...emitterOutputs(), ...(await staticFiles()), ...(await assetFiles())])
   // TagPage always writes the tag index: computeTagInfo adds the base tag

@@ -1,86 +1,112 @@
-// Reads the literals the site tests need from quartz.config.ts. The config
+// Reads the values the site tests need from quartz.config.ts. The config
 // cannot be imported by a test: it pulls in every Quartz component and their
-// stylesheets, which only the esbuild pipeline can load. The values the tests
-// need are short literals, so they are read from the source text with its
-// comments removed, and each lookup fails loudly if the literal it expects is
-// not found. This is a reader for the tests, not configuration of its own.
+// stylesheets, which only the esbuild pipeline can load. It is parsed instead
+// with the TypeScript compiler the build already depends on, so comments,
+// quoting and trailing commas are the parser's business and each value is
+// read from the syntax tree as the literal it is. Every lookup fails loudly
+// when what it expects is not there. This is a reader for the tests, not
+// configuration of its own.
 import assert from "node:assert"
 import fs from "node:fs"
+import ts from "typescript"
 
-// The index just past a comment that starts at `at`, or `at` when none does:
-// a line comment runs to the end of its line, a block comment to its `*/`.
-function commentEnd(source: string, at: number): number {
-  if (source.startsWith("//", at)) {
-    const end = source.indexOf("\n", at)
-    return end === -1 ? source.length : end
-  }
-  if (source.startsWith("/*", at)) {
-    const end = source.indexOf("*/", at + 2)
-    return end === -1 ? source.length : end + 2
-  }
-  return at
+const config = ts.createSourceFile(
+  "quartz.config.ts",
+  fs.readFileSync("quartz.config.ts", "utf8"),
+  ts.ScriptTarget.Latest,
+  true,
+)
+
+// Every node of the config, in source order.
+const nodes: ts.Node[] = []
+const visit = (node: ts.Node) => {
+  nodes.push(node)
+  ts.forEachChild(node, visit)
+}
+visit(config)
+
+// The one item in `matches`, or a failed assertion naming `what` so that a
+// config edit which removes or duplicates it is noticed at once.
+function only<T>(matches: T[], what: string): T {
+  const count = matches.length
+  assert.strictEqual(count, 1, `expected one ${what} in quartz.config.ts, found ${count}`)
+  return matches[0]
 }
 
-// The three quote characters that open a string in the config.
-const quotes = ['"', "'", "`"]
-
-// The source with its comments removed, whether they fill a line or follow
-// code on it, so that a plugin or option commented out is not read as
-// configured. Quotes are honoured, so a `//` inside a string survives; regex
-// literals are not tokenised, and the config has none.
-function withoutComments(source: string): string {
-  let out = ""
-  let quote = ""
-  for (let at = 0; at < source.length; ) {
-    const ch = source[at]
-    if (quote === "") {
-      const end = commentEnd(source, at)
-      if (end > at) {
-        at = end
-        continue
-      }
-      if (quotes.includes(ch)) quote = ch
-      out += ch
-      at += 1
-      continue
-    }
-    // Inside a string: an escaped character never closes it.
-    const step = ch === "\\" ? 2 : 1
-    out += source.slice(at, at + step)
-    if (step === 1 && ch === quote) quote = ""
-    at += step
-  }
-  return out
+// A scalar literal as the value it denotes, or undefined for any other node.
+function scalarOf(node: ts.Node): string | number | boolean | null | undefined {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text
+  if (ts.isNumericLiteral(node)) return Number(node.text)
+  if (node.kind === ts.SyntaxKind.TrueKeyword) return true
+  if (node.kind === ts.SyntaxKind.FalseKeyword) return false
+  if (node.kind === ts.SyntaxKind.NullKeyword) return null
+  return undefined
 }
 
-export const quartzConfig = withoutComments(fs.readFileSync("quartz.config.ts", "utf8"))
-
-// The first capture of `pattern` in quartz.config.ts, or a failed assertion
-// naming `what` so a config edit that moves the literal is noticed at once.
-function configLiteral(pattern: RegExp, what: string): string {
-  const match = pattern.exec(quartzConfig)
-  assert(match, `could not find ${what} in quartz.config.ts`)
-  return match[1]
+// A literal expression as the value it denotes: a scalar, or an array or
+// object of literals. Anything else is not a literal the tests can read.
+function valueOf(node: ts.Node): unknown {
+  if (ts.isArrayLiteralExpression(node)) return node.elements.map(valueOf)
+  if (ts.isObjectLiteralExpression(node)) return Object.fromEntries(node.properties.map(entryOf))
+  const scalar = scalarOf(node)
+  assert(scalar !== undefined, `${node.getText()} in quartz.config.ts is not a literal`)
+  return scalar
 }
 
-// Whether the config lists a plugin, written as `Plugin.Name(`. Each emitter
-// and filter the tests model contributes only when it is configured, so
-// removing one turns the footer links it served into failures.
+// A property of an object literal as a [name, value] pair.
+function entryOf(property: ts.ObjectLiteralElementLike): [string, unknown] {
+  assert(ts.isPropertyAssignment(property), `${property.getText()} is not a plain property`)
+  const name = property.name
+  assert(ts.isIdentifier(name) || ts.isStringLiteral(name), `${name.getText()} is not a plain name`)
+  return [name.text, valueOf(property.initializer)]
+}
+
+// The calls that configure a plugin, written `Plugin.Name(...)`.
+function pluginCalls(plugin: string): ts.CallExpression[] {
+  return nodes.filter(
+    (node): node is ts.CallExpression =>
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === "Plugin" &&
+      node.expression.name.text === plugin,
+  )
+}
+
+// Whether the config lists a plugin. Each emitter and filter the tests model
+// contributes only when it is configured, so removing one turns the footer
+// links it served into failures.
 export function configured(plugin: string): boolean {
-  return quartzConfig.includes(`Plugin.${plugin}(`)
+  return pluginCalls(plugin).length > 0
+}
+
+// The options a plugin is configured with, as literals: the object it merges
+// over its own defaults, or none when it is called without one.
+export function configuredOptions(plugin: string): Record<string, unknown> {
+  const [options] = only(pluginCalls(plugin), `Plugin.${plugin}()`).arguments
+  if (options === undefined) return {}
+  assert(ts.isObjectLiteralExpression(options), `Plugin.${plugin}() is not given an object literal`)
+  return Object.fromEntries(options.properties.map(entryOf))
+}
+
+// The value of the one property of the config with the given name.
+function setting(name: string): unknown {
+  const assignments = nodes.filter(
+    (node): node is ts.PropertyAssignment =>
+      ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === name,
+  )
+  return valueOf(only(assignments, name).initializer)
 }
 
 // The ignorePatterns array the build passes to its content glob.
 export function configuredIgnorePatterns(): string[] {
-  const literal = configLiteral(/ignorePatterns:\s*(\[[^\]]*\])/, "ignorePatterns")
-  return JSON.parse(literal.replaceAll("'", '"').replace(/,\s*\]/, "]"))
+  const patterns = setting("ignorePatterns")
+  assert(Array.isArray(patterns), "ignorePatterns in quartz.config.ts is not an array")
+  return patterns.map(String)
 }
 
 // Host and optional path prefix the site is served from, as Quartz's baseUrl.
-// The quotes in the pattern are written \x22: Lizard, which Codacy runs on
-// this file, reads a bare quote inside a regex literal as the start of a
-// string and misreads every function after it.
 export function configuredBase(): { host: string; prefix: string } {
-  const [host, ...rest] = configLiteral(/baseUrl:\s*\x22([^\x22]+)\x22/, "baseUrl").split("/")
+  const [host, ...rest] = String(setting("baseUrl")).split("/")
   return { host, prefix: rest.join("/") }
 }

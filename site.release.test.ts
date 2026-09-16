@@ -139,7 +139,13 @@ describe("release boundaries", () => {
         `CreatedModifiedDate reads page dates from git; ${file} must stay in the Docker context`,
       )
     }
-    for (const file of [".npmrc", "node_modules/preact/package.json", "public/index.html"]) {
+    for (const file of [
+      ".npmrc",
+      ".env",
+      ".env.local",
+      "node_modules/preact/package.json",
+      "public/index.html",
+    ]) {
       assert(dockerIgnores(dockerignore, file), `.dockerignore should exclude ${file}`)
     }
   })
