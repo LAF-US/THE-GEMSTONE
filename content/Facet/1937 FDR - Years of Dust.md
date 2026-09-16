@@ -1,7 +1,6 @@
 ---
 tags:
   - Category/Facet/Art
-date:
 ---
 ![[RA poster Years of Dust.jpg]]
 
