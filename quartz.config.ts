@@ -2,13 +2,14 @@ import { QuartzConfig } from "./quartz/cfg"
 import * as Plugin from "./quartz/plugins"
 
 /**
- * Quartz 4.0 Configuration
+ * Quartz 4 Configuration
  *
  * See https://quartz.jzhao.xyz/configuration for more information.
  */
 const config: QuartzConfig = {
   configuration: {
     pageTitle: "⟣⟡⟢",
+    pageTitleSuffix: "",
     enableSPA: true,
     enablePopovers: true,
     analytics: null,
@@ -34,6 +35,7 @@ const config: QuartzConfig = {
           secondary: "#4d6b53",
           tertiary: "#8DB580",
           highlight: "#BEBEBE",
+          textHighlight: "#fff23688",
         },
         darkMode: {
           light: "#000000",
@@ -44,6 +46,7 @@ const config: QuartzConfig = {
           secondary: "#4d6b53",
           tertiary: "#8DB580",
           highlight: "#BEBEBE",
+          textHighlight: "#b3aa0288",
         },
       },
     },
@@ -52,7 +55,7 @@ const config: QuartzConfig = {
     transformers: [
       Plugin.FrontMatter(),
       Plugin.CreatedModifiedDate({
-        priority: ["frontmatter", "git"],
+        priority: ["frontmatter", "git", "filesystem"],
       }),
       Plugin.SyntaxHighlighting({
         theme: {
@@ -82,7 +85,10 @@ const config: QuartzConfig = {
       }),
       Plugin.Assets(),
       Plugin.Static(),
+      Plugin.Favicon(),
       Plugin.NotFoundPage(),
+      // Comment out CustomOgImages to speed up build time
+      Plugin.CustomOgImages(),
     ],
   },
 }
