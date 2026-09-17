@@ -37,9 +37,12 @@ import {
 // The path under public/ at which write() in quartz/plugins/emitters/helpers.ts
 // lands a slug with an extension: it joins the output directory and
 // `slug + ext` with joinSegments, which strips the slashes at either end of
-// each segment, so a permalink of /legacy is written at legacy.html.
+// each segment, so a permalink of /legacy is written at legacy.html, and the
+// filesystem resolves the dot segments of the path it is handed, so a
+// permalink of legacy/../old is written at old.html. A path that climbs out
+// of public/ is kept as such; no request reaches it.
 function written(slug: string, ext: string): string {
-  return stripSlashes(slug + ext)
+  return path.posix.normalize(stripSlashes(slug + ext))
 }
 
 // The files ContentIndex writes: its content index always, and the RSS feed
@@ -227,6 +230,14 @@ describe("footer", () => {
       ].join("\n"),
     )
     assert.deepStrictEqual(inlineTags(body), ["release", "idaho/politics"])
+  })
+
+  test("an output path lands where the filesystem puts it", () => {
+    // Checked against a real build: a permalink of legacy/../old is written
+    // at old.html, with an empty legacy/ directory beside it.
+    assert.strictEqual(written("/legacy/../old", ".html"), "old.html")
+    assert.strictEqual(written("./About", ".html"), "About.html")
+    assert.strictEqual(written("../outside", ".html"), "../outside.html")
   })
 
   test("every footer link points at a page the site generates", async () => {

@@ -4,15 +4,20 @@ import test, { describe } from "node:test"
 import assert from "node:assert"
 import { configReader } from "./site.config-reader"
 
-// A config in Quartz's shape with the given emitters and configuration, and
-// any further text inside its plugins object.
-function config(emitters: string, configuration = 'baseUrl: "example.org"', more = ""): string {
+// A config in Quartz's shape with the given emitters and configuration, any
+// further text inside its plugins object, and the given transformers.
+function config(
+  emitters: string,
+  configuration = 'baseUrl: "example.org"',
+  more = "",
+  transformers = "Plugin.FrontMatter()",
+): string {
   return [
     'import * as Plugin from "./quartz/plugins"',
     "const config = {",
     `  configuration: { ${configuration} },`,
     "  plugins: {",
-    "    transformers: [Plugin.FrontMatter()],",
+    `    transformers: [${transformers}],`,
     "    filters: [],",
     `    emitters: [${emitters}],`,
     `    ${more}`,
@@ -47,6 +52,15 @@ describe("config reader", () => {
     assert.throws(() => twice.configuredOptions("Favicon"), /found 2/)
     const stray = config("", undefined, "extra: [Plugin.Favicon()],")
     assert.throws(() => configReader(stray), /plugins\.extra is not a plugin array Quartz runs/)
+  })
+
+  test("tells which of two plugins the config lists first", () => {
+    const ofmFirst = "Plugin.ObsidianFlavoredMarkdown(), Plugin.FrontMatter()"
+    const reader = configReader(config("Plugin.Favicon()", undefined, "", ofmFirst))
+    assert.strictEqual(reader.configuredBefore("FrontMatter", "ObsidianFlavoredMarkdown"), false)
+    assert.strictEqual(reader.configuredBefore("ObsidianFlavoredMarkdown", "FrontMatter"), true)
+    assert.strictEqual(reader.configuredBefore("FrontMatter", "Favicon"), true)
+    assert.throws(() => reader.configuredBefore("FrontMatter", "CNAME"), /found 0/)
   })
 
   test("reads the site settings as the literals they are", () => {

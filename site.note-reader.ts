@@ -12,7 +12,7 @@ import yaml from "js-yaml"
 import toml from "toml"
 import remarkParse from "remark-parse"
 import { unified } from "unified"
-import { configured, configuredOptions } from "./site.config-reader"
+import { configured, configuredBefore, configuredOptions } from "./site.config-reader"
 import {
   FilePath,
   FullSlug,
@@ -153,12 +153,18 @@ export function inlineTags(body: string): string[] {
 // tags normalised the way the FrontMatter transformer normalises them and
 // ObsidianFlavoredMarkdown's tags from the body appended, without repeats.
 // With no FrontMatter transformer configured, no note has any, and
-// ObsidianFlavoredMarkdown adds tags only to a note that has frontmatter.
+// ObsidianFlavoredMarkdown keeps a tag it finds only when the frontmatter is
+// already there when it looks (ofm.ts checks file.data.frontmatter), which
+// takes FrontMatter listed before it; listed after, the tag becomes a link
+// but no tag page. Checked against a real build either way.
 export function frontmatterOf(file: FilePath): Frontmatter {
   if (!configured("FrontMatter")) return {}
   const { data, content } = parsedNote(file)
   const tags = listField(data, ["tags", "tag"]).map(slugTag)
-  data.tags = [...new Set([...tags, ...inlineTags(content)])]
+  const kept =
+    configured("ObsidianFlavoredMarkdown") &&
+    configuredBefore("FrontMatter", "ObsidianFlavoredMarkdown")
+  data.tags = [...new Set([...tags, ...(kept ? inlineTags(content) : [])])]
   return data
 }
 

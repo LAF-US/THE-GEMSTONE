@@ -118,6 +118,13 @@ export function configReader(source: string) {
     // footer links it served into failures.
     configured: (plugin: string): boolean => named(plugin).length > 0,
 
+    // Whether the config lists one plugin before another. Quartz attaches the
+    // transformers' markdown plugins in the order the config lists them, so
+    // what one leaves for the next depends on that order.
+    configuredBefore: (plugin: string, other: string): boolean =>
+      calls.indexOf(only(named(plugin), `Plugin.${plugin}()`)) <
+      calls.indexOf(only(named(other), `Plugin.${other}()`)),
+
     // The options a plugin is configured with, as literals: the object it
     // merges over its own defaults, or none when it is called without one.
     configuredOptions: (plugin: string): Record<string, unknown> => {
@@ -145,4 +152,10 @@ export function configReader(source: string) {
 
 // The reader of the site's own config, which the site tests use.
 const reader = configReader(fs.readFileSync("quartz.config.ts", "utf8"))
-export const { configured, configuredOptions, configuredIgnorePatterns, configuredBase } = reader
+export const {
+  configured,
+  configuredBefore,
+  configuredOptions,
+  configuredIgnorePatterns,
+  configuredBase,
+} = reader
