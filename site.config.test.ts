@@ -54,13 +54,19 @@ describe("config reader", () => {
     assert.throws(() => configReader(stray), /plugins\.extra is not a plugin array Quartz runs/)
   })
 
-  test("tells which of two plugins the config lists first", () => {
-    const ofmFirst = "Plugin.ObsidianFlavoredMarkdown(), Plugin.FrontMatter()"
-    const reader = configReader(config("Plugin.Favicon()", undefined, "", ofmFirst))
-    assert.strictEqual(reader.configuredBefore("FrontMatter", "ObsidianFlavoredMarkdown"), false)
-    assert.strictEqual(reader.configuredBefore("ObsidianFlavoredMarkdown", "FrontMatter"), true)
-    assert.strictEqual(reader.configuredBefore("FrontMatter", "Favicon"), true)
-    assert.throws(() => reader.configuredBefore("FrontMatter", "CNAME"), /found 0/)
+  test("lists each plugin array in order, with the options written", () => {
+    const ofmFirst = "Plugin.ObsidianFlavoredMarkdown({ parseTags: false }), Plugin.FrontMatter()"
+    const reader = configReader(config("Plugin.Favicon(), Plugin.CNAME()", undefined, "", ofmFirst))
+    assert.deepStrictEqual(reader.configuredPlugins("transformers"), [
+      { name: "ObsidianFlavoredMarkdown", options: { parseTags: false } },
+      { name: "FrontMatter", options: undefined },
+    ])
+    assert.deepStrictEqual(reader.configuredPlugins("filters"), [])
+    assert.deepStrictEqual(
+      reader.configuredPlugins("emitters").map((plugin) => plugin.name),
+      ["Favicon", "CNAME"],
+    )
+    assert.deepStrictEqual(reader.configuredConfiguration(), { baseUrl: "example.org" })
   })
 
   test("reads the site settings as the literals they are", () => {

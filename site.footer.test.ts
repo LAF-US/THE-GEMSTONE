@@ -2,8 +2,8 @@
 // as opposed to the Quartz framework under quartz/. Run with `npm test`, which
 // runs from the repository root, so every path below is a literal relative to
 // it. site.config-reader.ts reads the values it needs from quartz.config.ts,
-// site.note-reader.ts reads each note as the transformers do, and
-// site.release.test.ts covers the release boundaries.
+// site.note-reader.ts runs Quartz's own transformers and filters on each
+// note, and site.release.test.ts covers the release boundaries.
 import test, { describe } from "node:test"
 import assert from "node:assert"
 import path from "node:path"
@@ -16,13 +16,11 @@ import {
 import { footerLinks } from "./site.links"
 import {
   aliasSlugs,
-  frontmatterOf,
-  Frontmatter,
-  inlineTags,
-  published,
-  socialImageOf,
+  Note,
+  readNote,
   tagSlugs,
-  textTransformed,
+  transformedNote,
+  transformedText,
 } from "./site.note-reader"
 import { glob } from "./quartz/util/glob"
 import {
@@ -114,25 +112,25 @@ function folderSlugs(slug: string): string[] {
 // which only describe a tag page TagPage renders when some note carries that
 // tag. FolderPage writes every ancestor folder, TagPage every tag and tag
 // prefix, and AliasRedirects every alias and permalink.
-function notePages(slug: FullSlug, data: Frontmatter): string[] {
+function notePages(slug: FullSlug, note: Note): string[] {
   const pages: string[] = []
   const ownPage = !slug.endsWith("/index") && !slug.startsWith("tags/")
   if (configured("ContentPage") && ownPage) pages.push(slug)
   if (configured("FolderPage")) pages.push(...folderSlugs(slug))
-  if (configured("TagPage")) pages.push(...tagSlugs(data))
-  if (configured("AliasRedirects")) pages.push(...aliasSlugs(data, slug))
+  if (configured("TagPage")) pages.push(...tagSlugs(note))
+  if (configured("AliasRedirects")) pages.push(...aliasSlugs(note))
   return pages
 }
 
 // The files the build writes for one note: none when a filter drops it,
-// otherwise its pages and, when CustomOgImages is configured and the note is
-// left without a socialImage, its social image.
-function noteFiles(file: FilePath): string[] {
-  const slug = slugifyFilePath(file)
-  const data = frontmatterOf(file)
-  if (!published(data)) return []
-  const files = notePages(slug, data).map((page) => written(page, ".html"))
-  if (configured("CustomOgImages") && socialImageOf(data) === undefined) {
+// otherwise its pages and, when CustomOgImages is configured and the
+// transformers leave the note without a socialImage, its social image.
+async function noteFiles(file: FilePath): Promise<string[]> {
+  const note = await readNote(file)
+  if (!note.published) return []
+  const slug = note.data.slug as FullSlug
+  const files = notePages(slug, note).map((page) => written(page, ".html"))
+  if (configured("CustomOgImages") && note.data.frontmatter?.socialImage === undefined) {
     files.push(written(`${slug}-og-image`, ".webp"))
   }
   return files
@@ -148,7 +146,8 @@ async function generatedFiles(): Promise<Set<string>> {
   if (configured("TagPage")) files.add(written(joinSegments("tags", "index"), ".html"))
   for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
     if (!file.endsWith(".md")) continue
-    for (const output of noteFiles(file)) files.add(output)
+    for (const output of await noteFiles(joinSegments("content", file) as FilePath))
+      files.add(output)
   }
   return files
 }
@@ -201,35 +200,38 @@ function servedFile(files: Set<string>, requested: string): string | undefined {
 }
 
 describe("footer", () => {
-  test("a note's text is transformed as ObsidianFlavoredMarkdown transforms it", () => {
+  test("a note's text goes through the transformers' text stages", () => {
     // Checked against a real build: with this frontmatter RemoveDrafts drops
     // the note, because the comment is gone before the frontmatter is read.
-    assert.strictEqual(textTransformed('draft: "%% explanation %%true"'), 'draft: "true"')
-    assert.strictEqual(textTransformed("> [!note] Title\ntext"), "> [!note] Title\n> \ntext")
-    assert.strictEqual(textTransformed("[[Note#My Heading|shown]]"), "[[Note#my-heading|shown]]")
+    assert.strictEqual(transformedText('draft: "%% explanation %%true"'), 'draft: "true"')
+    assert.strictEqual(transformedText("> [!note] Title\ntext"), "> [!note] Title\n> \ntext")
+    assert.strictEqual(transformedText("[[Note#My Heading|shown]]"), "[[Note#my-heading|shown]]")
     assert.strictEqual(
-      textTransformed("![[https://x.test/a.png|alt]]"),
+      transformedText("![[https://x.test/a.png|alt]]"),
       "![alt](https://x.test/a.png)",
     )
   })
 
-  test("tags are read from a note's text as ObsidianFlavoredMarkdown reads them", () => {
-    // Checked against a real build: it writes tags/release.html and
-    // tags/idaho/politics.html for this text and nothing for the rest.
-    const body = textTransformed(
-      [
-        "# Heading #release",
-        "",
-        "Body with #idaho/politics, #2024, `#code` and %% #hidden %%",
-        "",
-        "```",
-        "#fenced",
-        "```",
-        "",
-        "[[Note#section]], https://x.test/#frag and end#notag",
-      ].join("\n"),
-    )
-    assert.deepStrictEqual(inlineTags(body), ["release", "idaho/politics"])
+  test("tags are read from a note's text as ObsidianFlavoredMarkdown reads them", async () => {
+    // Checked against a real build: it writes tags/release.html,
+    // tags/idaho/politics.html and tags/arrow.html for this text and nothing
+    // for the rest. A tag inside a highlight or a wikilink alias is consumed
+    // by the replacement that runs before the tag pass.
+    const body = [
+      "# Heading #release",
+      "",
+      "Body with #idaho/politics, #2024, `#code` and %% #hidden %%",
+      "",
+      "```",
+      "#fenced",
+      "```",
+      "",
+      "[[Note#section]], https://x.test/#frag and end#notag",
+      "",
+      "== #highlighted== and [[Note|#aliased]] and -> #arrow",
+    ].join("\n")
+    const { data } = await transformedNote("content/Probe.md" as FilePath, body)
+    assert.deepStrictEqual(data.frontmatter?.tags, ["release", "idaho/politics", "arrow"])
   })
 
   test("an output path lands where the filesystem puts it", () => {

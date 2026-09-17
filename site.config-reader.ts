@@ -102,15 +102,27 @@ export function configReader(source: string) {
   // Quartz runs. Any other key there is refused rather than counted.
   const plugins = property("plugins")
   assert(ts.isObjectLiteralExpression(plugins), "plugins in quartz.config.ts is not an object")
-  const calls = plugins.properties.flatMap((group) => {
-    const [name, array] = groupOf(group)
-    assert(
-      ["transformers", "filters", "emitters"].includes(name),
-      `plugins.${name} is not a plugin array Quartz runs`,
-    )
-    return array.elements.map(pluginCall)
-  })
+  const groups = new Map(
+    plugins.properties.map((group) => {
+      const [name, array] = groupOf(group)
+      assert(
+        ["transformers", "filters", "emitters"].includes(name),
+        `plugins.${name} is not a plugin array Quartz runs`,
+      )
+      return [name, array.elements.map(pluginCall)]
+    }),
+  )
+  const calls = [...groups.values()].flat()
   const named = (plugin: string) => calls.filter((call) => pluginName(call) === plugin)
+
+  // The options object a plugin call is written with, as literals, or
+  // undefined when it is called without one.
+  const optionsOf = (call: ts.CallExpression): Record<string, unknown> | undefined => {
+    const [options] = call.arguments
+    if (options === undefined) return undefined
+    assert(ts.isObjectLiteralExpression(options), `${call.getText()} is not given an object`)
+    return Object.fromEntries(options.properties.map(entryOf))
+  }
 
   return {
     // Whether the config lists a plugin. Each emitter and filter the tests
@@ -118,20 +130,32 @@ export function configReader(source: string) {
     // footer links it served into failures.
     configured: (plugin: string): boolean => named(plugin).length > 0,
 
-    // Whether the config lists one plugin before another. Quartz attaches the
-    // transformers' markdown plugins in the order the config lists them, so
-    // what one leaves for the next depends on that order.
-    configuredBefore: (plugin: string, other: string): boolean =>
-      calls.indexOf(only(named(plugin), `Plugin.${plugin}()`)) <
-      calls.indexOf(only(named(other), `Plugin.${other}()`)),
+    // The plugins of one of the three arrays, in the order Quartz runs them,
+    // each with the options it is written with.
+    configuredPlugins: (
+      group: "transformers" | "filters" | "emitters",
+    ): { name: string; options: Record<string, unknown> | undefined }[] =>
+      (groups.get(group) ?? []).map((call) => ({
+        name: pluginName(call),
+        options: optionsOf(call),
+      })),
 
     // The options a plugin is configured with, as literals: the object it
     // merges over its own defaults, or none when it is called without one.
-    configuredOptions: (plugin: string): Record<string, unknown> => {
-      const [options] = only(named(plugin), `Plugin.${plugin}()`).arguments
-      if (options === undefined) return {}
-      assert(ts.isObjectLiteralExpression(options), `Plugin.${plugin}() is not given an object`)
-      return Object.fromEntries(options.properties.map(entryOf))
+    configuredOptions: (plugin: string): Record<string, unknown> =>
+      optionsOf(only(named(plugin), `Plugin.${plugin}()`)) ?? {},
+
+    // The configuration object as the literals it is written with, for the
+    // build context handed to Quartz's own plugins.
+    configuredConfiguration: (): Record<string, unknown> => {
+      const configuration = valueOf(property("configuration"))
+      assert(
+        typeof configuration === "object" &&
+          configuration !== null &&
+          !Array.isArray(configuration),
+        "configuration in quartz.config.ts is not an object",
+      )
+      return configuration as Record<string, unknown>
     },
 
     // The ignorePatterns array the build passes to its content glob.
@@ -154,8 +178,9 @@ export function configReader(source: string) {
 const reader = configReader(fs.readFileSync("quartz.config.ts", "utf8"))
 export const {
   configured,
-  configuredBefore,
+  configuredPlugins,
   configuredOptions,
+  configuredConfiguration,
   configuredIgnorePatterns,
   configuredBase,
 } = reader
