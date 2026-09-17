@@ -65,6 +65,17 @@ function pluginName(call: ts.CallExpression): string {
   return (call.expression as ts.PropertyAccessExpression).name.text
 }
 
+// A property of the plugins object as its name and the array it holds.
+function groupOf(group: ts.ObjectLiteralElementLike): [string, ts.ArrayLiteralExpression] {
+  assert(
+    ts.isPropertyAssignment(group) && ts.isIdentifier(group.name),
+    `${group.getText()} is not a plain property`,
+  )
+  const array = group.initializer
+  assert(ts.isArrayLiteralExpression(array), `${group.getText()} is not an array of plugins`)
+  return [group.name.text, array]
+}
+
 // A reader for one config source. The site's own config is read below; the
 // tests of the reader itself pass small configs written in place.
 export function configReader(source: string) {
@@ -87,12 +98,16 @@ export function configReader(source: string) {
     ).initializer
 
   // The calls that configure plugins: the elements of the transformers,
-  // filters and emitters arrays of the config's plugins object.
+  // filters and emitters arrays of the config's plugins object, the three
+  // Quartz runs. Any other key there is refused rather than counted.
   const plugins = property("plugins")
   assert(ts.isObjectLiteralExpression(plugins), "plugins in quartz.config.ts is not an object")
   const calls = plugins.properties.flatMap((group) => {
-    const array = ts.isPropertyAssignment(group) ? group.initializer : group
-    assert(ts.isArrayLiteralExpression(array), `${group.getText()} is not an array of plugins`)
+    const [name, array] = groupOf(group)
+    assert(
+      ["transformers", "filters", "emitters"].includes(name),
+      `plugins.${name} is not a plugin array Quartz runs`,
+    )
     return array.elements.map(pluginCall)
   })
   const named = (plugin: string) => calls.filter((call) => pluginName(call) === plugin)

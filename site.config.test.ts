@@ -4,8 +4,9 @@ import test, { describe } from "node:test"
 import assert from "node:assert"
 import { configReader } from "./site.config-reader"
 
-// A config in Quartz's shape with the given emitters and configuration.
-function config(emitters: string, configuration = 'baseUrl: "example.org"'): string {
+// A config in Quartz's shape with the given emitters and configuration, and
+// any further text inside its plugins object.
+function config(emitters: string, configuration = 'baseUrl: "example.org"', more = ""): string {
   return [
     'import * as Plugin from "./quartz/plugins"',
     "const config = {",
@@ -14,6 +15,7 @@ function config(emitters: string, configuration = 'baseUrl: "example.org"'): str
     "    transformers: [Plugin.FrontMatter()],",
     "    filters: [],",
     `    emitters: [${emitters}],`,
+    `    ${more}`,
     "  },",
     "}",
     "export default config",
@@ -43,6 +45,8 @@ describe("config reader", () => {
     assert.throws(() => reader.configuredOptions("ContentIndex"), /not given an object/)
     const twice = configReader(config("Plugin.Favicon(), Plugin.Favicon()"))
     assert.throws(() => twice.configuredOptions("Favicon"), /found 2/)
+    const stray = config("", undefined, "extra: [Plugin.Favicon()],")
+    assert.throws(() => configReader(stray), /plugins\.extra is not a plugin array Quartz runs/)
   })
 
   test("reads the site settings as the literals they are", () => {

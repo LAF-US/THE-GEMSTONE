@@ -15,6 +15,13 @@ function configLines(text: string): string[] {
     .filter((line) => line !== "" && !line.startsWith("#"))
 }
 
+// The keys among a pre-commit config's lines that would change what code a
+// hook runs: its command, or the packages installed beside it.
+function codeOverrides(lines: string[]): string[] {
+  const keys = lines.flatMap((line) => /^(?:- )?(entry|additional_dependencies):/.exec(line) ?? [])
+  return keys.filter((key) => key !== undefined && !key.endsWith(":"))
+}
+
 // How Docker ends up matching a .dockerignore pattern, as Pattern.compile in
 // moby/patternmatcher detects it while turning the pattern into a regex: a
 // pattern without wildcards is compared for equality, one ending in `**` as a
@@ -275,6 +282,14 @@ describe("release boundaries", () => {
       assert.strictEqual(repo, "https://github.com/pre-commit/pre-commit-hooks")
     }
     assert.strictEqual(listed("rev").length, repos.length, "every repo needs a pinned rev")
+    // pre-commit merges a config hook over the manifest hook of that id, and
+    // its config schema accepts every manifest key but id, stages and
+    // language (CONFIG_HOOK_DICT in pre_commit/clientlib.py), so a config
+    // could put its own command or packages under a read-only id. Keys that
+    // change what code runs are refused; the rest only select files or pass
+    // arguments to the same code.
+    assert.deepStrictEqual(codeOverrides(lines), [])
+    assert.deepStrictEqual(codeOverrides(["- id: check-yaml", "entry: touch x"]), ["entry"])
     const hookIds = listed("id")
     assert(hookIds.length > 0, "no hooks found in .pre-commit-config.yaml")
     for (const id of hookIds) {
