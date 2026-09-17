@@ -12,13 +12,18 @@ import path from "node:path"
 import remarkParse from "remark-parse"
 import { unified } from "unified"
 import { VFile } from "vfile"
-import { configuredConfiguration, configuredPlugins } from "./site.config-reader"
+import {
+  configuredConfiguration,
+  configuredIgnorePatterns,
+  configuredPlugins,
+} from "./site.config-reader"
 import type {
   QuartzFilterPluginInstance,
   QuartzTransformerPluginInstance,
 } from "./quartz/plugins/types"
 import type { ProcessedContent, QuartzPluginData } from "./quartz/plugins/vfile"
 import type { BuildCtx } from "./quartz/util/ctx"
+import { glob } from "./quartz/util/glob"
 import {
   FilePath,
   getAllSegmentPrefixes,
@@ -65,8 +70,13 @@ const filters = configuredPlugins("filters").map(({ name, options }) =>
 )
 
 // The build context the plugins are handed: the configuration as written,
-// and the argv of a plain `npx quartz build`.
+// the argv of a plain `npx quartz build`, and the files and slugs build.ts
+// lists before parsing, every file under the content directory the config
+// does not ignore. ObsidianFlavoredMarkdown checks a wikilink against the
+// slugs when disableBrokenWikilinks is on, and FrontMatter adds each note's
+// aliases to them as it runs.
 const argv = { directory: "content", verbose: false, output: "public", serve: false, watch: false }
+const allFiles = await glob("**/*.*", argv.directory, configuredIgnorePatterns())
 const ctx = {
   buildId: "site-tests",
   argv: { ...argv, port: 8080, wsPort: 3001 },
@@ -74,8 +84,8 @@ const ctx = {
     configuration: configuredConfiguration(),
     plugins: { transformers, filters, emitters: [] },
   },
-  allSlugs: [],
-  allFiles: [],
+  allSlugs: allFiles.map((file) => slugifyFilePath(file)),
+  allFiles,
   incremental: false,
 } as unknown as BuildCtx
 

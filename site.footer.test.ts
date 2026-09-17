@@ -144,8 +144,12 @@ async function generatedFiles(): Promise<Set<string>> {
   // TagPage always writes the tag index: computeTagInfo adds the base tag
   // whether or not any note survives the filters.
   if (configured("TagPage")) files.add(written(joinSegments("tags", "index"), ".html"))
-  for (const file of await glob("**/*.*", "content", configuredIgnorePatterns())) {
-    if (!file.endsWith(".md")) continue
+  // The notes in the order build.ts parses them, which is the order their
+  // aliases join the slugs the transformers see.
+  const notes = (await glob("**/*.*", "content", configuredIgnorePatterns()))
+    .filter((file) => file.endsWith(".md"))
+    .sort()
+  for (const file of notes) {
     for (const output of await noteFiles(joinSegments("content", file) as FilePath))
       files.add(output)
   }
