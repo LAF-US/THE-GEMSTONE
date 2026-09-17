@@ -26,6 +26,14 @@ function codeOverrides(hooks: Hook[]): string[] {
   )
 }
 
+// Whether a rev pins a repository: a version tag, as pre-commit-hooks tags
+// its releases (vX.Y.Z), or a full commit id. pre-commit's own WarnMutableRev
+// only warns, and counts any name with a dot as pinned, so a branch such as
+// release.2026 would pass it.
+function pinned(rev: unknown): boolean {
+  return typeof rev === "string" && /^(?:v?\d+(?:\.\d+)+|[0-9a-f]{40})$/.test(rev)
+}
+
 describe("pre-commit.ci", () => {
   test("runs read-only hooks and never rewrites a branch", () => {
     // Parsed with a YAML safe load, as pre-commit's own yaml_load is, so a
@@ -49,14 +57,11 @@ describe("pre-commit.ci", () => {
     // The ids are the read-only checks of the pre-commit-hooks repository, so
     // every hook must come from there, at a pinned revision: a local hook or
     // another repository could put a rewriting hook under one of these ids.
-    // A rev is pinned by pre-commit's own rule (WarnMutableRev): it holds a
-    // dot, as a version tag does, or is all hex, as a commit is.
     const repos = config.repos ?? []
     assert(repos.length > 0, "no repos found in .pre-commit-config.yaml")
     const hooks = repos.flatMap((repo) => {
       assert.strictEqual(repo.repo, "https://github.com/pre-commit/pre-commit-hooks")
-      const rev = repo.rev
-      assert(typeof rev === "string" && /\.|^[0-9a-fA-F]+$/.test(rev), `rev ${rev} is not pinned`)
+      assert(pinned(repo.rev), `rev ${repo.rev} is not pinned`)
       assert(Array.isArray(repo.hooks), `repo ${repo.repo} lists no hooks`)
       return repo.hooks as Hook[]
     })
@@ -68,5 +73,8 @@ describe("pre-commit.ci", () => {
     assert.deepStrictEqual(codeOverrides(hooks), [])
     const flow = yaml.load('[{id: check-yaml, "entry": touch x}, {id: check-symlinks}]') as Hook[]
     assert.deepStrictEqual(codeOverrides(flow), ["check-yaml: entry"])
+    for (const rev of ["v6.0.0", "24.1.0", "a".repeat(40)]) assert(pinned(rev), rev)
+    for (const rev of ["main", "release.2026", "v6", "abc123", undefined])
+      assert(!pinned(rev), String(rev))
   })
 })
