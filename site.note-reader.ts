@@ -29,11 +29,20 @@ import {
 } from "./quartz/util/path"
 
 // The transformers import browser assets only Quartz's esbuild build can
-// load; site.stub-assets.mjs resolves each to an empty module. It must be
-// registered before the imports it serves, hence the dynamic imports.
-register("./site.stub-assets.mjs", import.meta.url)
-const Transformers = await import("./quartz/plugins/transformers")
-const Filters = await import("./quartz/plugins/filters")
+// load; site.stub-assets.ts resolves each to an empty module. It must be
+// registered before the imports it serves, hence the dynamic imports, and a
+// new kind of asset would fail them, so the failure names the hook to extend.
+let Transformers: typeof import("./quartz/plugins/transformers")
+let Filters: typeof import("./quartz/plugins/filters")
+try {
+  register("./site.stub-assets.ts", import.meta.url)
+  Transformers = await import("./quartz/plugins/transformers")
+  Filters = await import("./quartz/plugins/filters")
+} catch (cause) {
+  const hint =
+    "Quartz's plugins could not be imported; site.stub-assets.ts resolves their browser assets"
+  throw new Error(hint, { cause })
+}
 
 // A plugin instance from Quartz's own module of that name, built with the
 // options the config writes for it.
@@ -88,6 +97,17 @@ export function transformedText(source: string): string {
 
 export type Note = { data: QuartzPluginData; published: boolean }
 
+// A note's syntax tree after the Markdown stages, or the failure of one of
+// them, named for the note as parse.ts names it.
+async function processed(note: VFile): Promise<ProcessedContent> {
+  try {
+    const tree = await processor.run(processor.parse(note), note)
+    return [tree, note] as unknown as ProcessedContent
+  } catch (cause) {
+    throw new Error(`Failed to process markdown \`${note.path}\``, { cause })
+  }
+}
+
 // A note at a path, from its source, as the transformers and filters leave
 // it: the text stages, the file data parse.ts sets, the Markdown stages, and
 // whether every configured filter would publish it.
@@ -96,8 +116,7 @@ export async function transformedNote(file: FilePath, source: string): Promise<N
   note.data.filePath = file
   note.data.relativePath = path.posix.relative(argv.directory, file) as FilePath
   note.data.slug = slugifyFilePath(note.data.relativePath)
-  const tree = await processor.run(processor.parse(note), note)
-  const content = [tree, note] as unknown as ProcessedContent
+  const content = await processed(note)
   const published = filters.every((filter) => filter.shouldPublish(ctx, content))
   return { data: note.data, published }
 }
