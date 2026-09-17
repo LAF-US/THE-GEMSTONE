@@ -27,11 +27,12 @@ function codeOverrides(hooks: Hook[]): string[] {
 }
 
 // Whether a rev pins a repository: a version tag, as pre-commit-hooks tags
-// its releases (vX.Y.Z), or a full commit id. pre-commit's own WarnMutableRev
-// only warns, and counts any name with a dot as pinned, so a branch such as
-// release.2026 would pass it.
+// its releases (vX.Y.Z), or a full commit id in either case of hex, as git
+// and pre-commit both read it. pre-commit's own WarnMutableRev only warns,
+// and counts any name with a dot as pinned, so a branch such as release.2026
+// would pass it.
 function pinned(rev: unknown): boolean {
-  return typeof rev === "string" && /^(?:v?\d+(?:\.\d+)+|[0-9a-f]{40})$/.test(rev)
+  return typeof rev === "string" && /^(?:v?\d+(?:\.\d+)+|[0-9a-fA-F]{40})$/.test(rev)
 }
 
 describe("pre-commit.ci", () => {
@@ -73,7 +74,7 @@ describe("pre-commit.ci", () => {
     assert.deepStrictEqual(codeOverrides(hooks), [])
     const flow = yaml.load('[{id: check-yaml, "entry": touch x}, {id: check-symlinks}]') as Hook[]
     assert.deepStrictEqual(codeOverrides(flow), ["check-yaml: entry"])
-    for (const rev of ["v6.0.0", "24.1.0", "a".repeat(40)]) assert(pinned(rev), rev)
+    for (const rev of ["v6.0.0", "24.1.0", "a".repeat(40), "F".repeat(40)]) assert(pinned(rev), rev)
     for (const rev of ["main", "release.2026", "v6", "abc123", undefined])
       assert(!pinned(rev), String(rev))
   })
