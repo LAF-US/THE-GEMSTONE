@@ -1,7 +1,8 @@
 // Tests for The Gemstone's release boundaries: what leaves the repository in
-// a Docker build context, an npm package or a pre-commit.ci run. Run with
-// `npm test`, which runs from the repository root, so every path below is a
-// literal relative to it. site.footer.test.ts covers the footer links.
+// a Docker build context or an npm package. Run with `npm test`, which runs
+// from the repository root, so every path below is a literal relative to it.
+// site.precommit.test.ts covers pre-commit.ci and site.footer.test.ts the
+// footer links.
 import test, { describe } from "node:test"
 import assert from "node:assert"
 import fs from "node:fs"
@@ -13,13 +14,6 @@ function configLines(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line !== "" && !line.startsWith("#"))
-}
-
-// The keys among a pre-commit config's lines that would change what code a
-// hook runs: its command, or the packages installed beside it.
-function codeOverrides(lines: string[]): string[] {
-  const keys = lines.flatMap((line) => /^(?:- )?(entry|additional_dependencies):/.exec(line) ?? [])
-  return keys.filter((key) => key !== undefined && !key.endsWith(":"))
 }
 
 // How Docker ends up matching a .dockerignore pattern, as Pattern.compile in
@@ -255,45 +249,5 @@ describe("release boundaries", () => {
       true,
       "package.json must stay private; that is what stops npm publish",
     )
-  })
-
-  test("pre-commit.ci runs read-only hooks and never rewrites a branch", () => {
-    // The file is prettier-formatted, so its settings are one per line and can
-    // be checked as text; no YAML deserializer is needed in test code.
-    const lines = configLines(fs.readFileSync(".pre-commit-config.yaml", "utf8"))
-    assert(lines.includes("autofix_prs: false"), "pre-commit.ci must not push fixes to branches")
-    const readOnly = new Set([
-      "check-merge-conflict",
-      "check-symlinks",
-      "check-yaml",
-      "detect-private-key",
-    ])
-    const listed = (key: string) =>
-      lines.flatMap((line) => {
-        const match = new RegExp(`^(?:- )?${key}: (\\S+)$`).exec(line)
-        return match ? [match[1]] : []
-      })
-    // The ids are the read-only checks of the pre-commit-hooks repository, so
-    // every hook must come from there, at a pinned revision: a local hook or
-    // another repository could put a rewriting hook under one of these ids.
-    const repos = listed("repo")
-    assert(repos.length > 0, "no repos found in .pre-commit-config.yaml")
-    for (const repo of repos) {
-      assert.strictEqual(repo, "https://github.com/pre-commit/pre-commit-hooks")
-    }
-    assert.strictEqual(listed("rev").length, repos.length, "every repo needs a pinned rev")
-    // pre-commit merges a config hook over the manifest hook of that id, and
-    // its config schema accepts every manifest key but id, stages and
-    // language (CONFIG_HOOK_DICT in pre_commit/clientlib.py), so a config
-    // could put its own command or packages under a read-only id. Keys that
-    // change what code runs are refused; the rest only select files or pass
-    // arguments to the same code.
-    assert.deepStrictEqual(codeOverrides(lines), [])
-    assert.deepStrictEqual(codeOverrides(["- id: check-yaml", "entry: touch x"]), ["entry"])
-    const hookIds = listed("id")
-    assert(hookIds.length > 0, "no hooks found in .pre-commit-config.yaml")
-    for (const id of hookIds) {
-      assert(readOnly.has(id), `hook ${id} is not in the read-only set`)
-    }
   })
 })
