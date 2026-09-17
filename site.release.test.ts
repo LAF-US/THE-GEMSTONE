@@ -184,7 +184,13 @@ describe("release boundaries", () => {
     // documents in gitrepository-layout(5), not HEAD alone: the config, the
     // refs and packed refs, loose and packed objects, and the shallow file a
     // CI checkout leaves. A partial exclusion such as `.git/objects`, or
-    // `.git/*` with `!.git/HEAD`, would find a repository it cannot read.
+    // `.git/*` with `!.git/HEAD`, would find a repository it cannot read. The
+    // object names have the length git writes, a two-character directory and
+    // thirty-eight more hex characters for a loose object and a forty-character
+    // hash for a pack, since `?` matches exactly one character and a rule
+    // spelled that way would exclude every real object while sparing a
+    // shorter probe.
+    const hash = "6a677ccb6c36cde40c82b43245028bf04cc2f847"
     for (const file of [
       ".git/HEAD",
       ".git/config",
@@ -192,9 +198,10 @@ describe("release boundaries", () => {
       ".git/shallow",
       ".git/refs/heads/main",
       ".git/refs/tags/v4.5.2",
-      ".git/objects/pack/pack-0.pack",
-      ".git/objects/pack/pack-0.idx",
-      ".git/objects/ab/cdef",
+      `.git/objects/pack/pack-${hash}.pack`,
+      `.git/objects/pack/pack-${hash}.idx`,
+      `.git/objects/pack/pack-${hash}.rev`,
+      `.git/objects/${hash.slice(0, 2)}/${hash.slice(2)}`,
     ]) {
       assert(
         !dockerIgnores(dockerignore, file),
