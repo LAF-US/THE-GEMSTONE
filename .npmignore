@@ -1,0 +1,4 @@
+# The Gemstone is a website, not an npm package. `"private": true` in
+# package.json is what stops `npm publish`; this file keeps repository content
+# (site source, notes, .npmrc) out of the npm release boundary as well.
+*
