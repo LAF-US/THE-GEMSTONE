@@ -1,1 +1,18 @@
 * text=auto eol=lf
+
+# Git LFS tracking for binary assets
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.png filter=lfs diff=lfs merge=lfs -text
+*.gif filter=lfs diff=lfs merge=lfs -text
+*.webp filter=lfs diff=lfs merge=lfs -text
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+*.pdf filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.ttf filter=lfs diff=lfs merge=lfs -text
+*.woff filter=lfs diff=lfs merge=lfs -text
+*.woff2 filter=lfs diff=lfs merge=lfs -text
+
+# Framework assets stay plain blobs: the site must build without git-lfs and upstream merges must stay clean.
+quartz/static/*.png -filter -diff -merge -text

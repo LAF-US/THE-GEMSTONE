@@ -3,31 +3,18 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "daily"
-    open-pull-requests-limit: 10
-    allow:
-      - dependency-type: "all"
-
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
-    allow:
-      - dependency-type: "all"
-
-  - package-ecosystem: "maven"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    open-pull-requests-limit: 5
-    allow:
-      - dependency-type: "all"
-
+    groups:
+      production-dependencies:
+        applies-to: "version-updates"
+        patterns:
+          - "*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
-    open-pull-requests-limit: 10
-    allow:
-      - dependency-type: "all"
+      interval: "weekly"
+    groups:
+      ci-dependencies:
+        applies-to: "version-updates"
+        patterns:
+          - "*"

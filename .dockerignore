@@ -1,0 +1,18 @@
+# Build context for the Quartz Dockerfile. The image copies the checkout with
+# `COPY . .`, so keep local installs, build output, and npm configuration out
+# of the context. Dependencies are installed inside the image.
+#
+# `.git` stays in the context on purpose: quartz.config.ts asks
+# CreatedModifiedDate to read page dates from git history before falling back
+# to filesystem timestamps, and without the repository every undated page
+# would carry the image's build time instead.
+.github
+node_modules
+public
+.quartz-cache
+.npmrc
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

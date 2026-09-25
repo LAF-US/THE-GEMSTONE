@@ -1,36 +1,41 @@
 name: Deploy Quartz site to GitHub Pages
- 
+
 on:
   push:
     branches:
       - main
- 
+
 permissions:
   contents: read
   pages: write
   id-token: write
- 
+
 concurrency:
   group: "pages"
   cancel-in-progress: false
- 
+
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Fetch all history for git info
-      - uses: actions/setup-node@v6
+          lfs: true # Fetch Git LFS objects (images and other binary assets)
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
       - name: Install Dependencies
         run: npm ci
+      - name: Test
+        run: npm test
       - name: Build Quartz
         run: npx quartz build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: public
- 
+
   deploy:
     needs: build
     environment:
@@ -40,4 +45,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
