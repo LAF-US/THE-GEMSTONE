@@ -5,8 +5,8 @@ source_code:
   encoding: "UTF-8"
   line_ending: "GIT"
 engines:
-- engine: "spotless"
-  steps:
-  - id: "spotless"
-    parameters:
-      configuration: "repository:/.cleanthat/spotless.yaml"
+  - engine: "spotless"
+    steps:
+      - id: "spotless"
+        parameters:
+          configuration: "repository:/.cleanthat/spotless.yaml"
