@@ -1,12 +1,2 @@
+# CleanThat configuration surface. Add engines only through a reviewed language-policy change.
 syntax_version: "2023-01-09"
-meta:
-  can_edit_not_protected_branches: false
-source_code:
-  encoding: "UTF-8"
-  line_ending: "GIT"
-engines:
-  - engine: "spotless"
-    steps:
-      - id: "spotless"
-        parameters:
-          configuration: "repository:/.cleanthat/spotless.yaml"
