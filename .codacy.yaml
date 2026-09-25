@@ -1,0 +1,29 @@
+---
+# Codacy configuration for The Gemstone.
+#
+# Codacy reads this file from the default branch, and a pull request that adds
+# or changes it is analysed with its own copy. While the file exists, the
+# "Ignored files" settings in Codacy's UI do not apply; exclusions live here,
+# in the repository, with their reasons.
+#
+# Opengrep's application-security patterns assume untrusted input reaching
+# file, shell, regex or deserialisation calls. Three files that read for the
+# site tests are not an input surface: site.note-reader.ts, a support module
+# for site.footer.test.ts, reads each note that Quartz's own glob finds under
+# content/, the same read the RemoveDrafts filter and TagPage perform at
+# build time; site.docker-context.ts, a support module for
+# site.release.test.ts, compiles the patterns of the repository's own
+# .dockerignore into a regex, as Docker itself does, to check what leaves the
+# build context; site.precommit.test.ts parses the repository's own
+# .pre-commit-config.yaml, and a fixture written in the test, with js-yaml's
+# load, which in js-yaml 4 is its one, safe loader (the unsafe loader and
+# safeLoad were removed in 4.0), where the pattern assumes the loader of
+# js-yaml 3. Those three files are excluded from Opengrep only. Every other
+# Codacy tool and metric still covers them, and Opengrep still covers all
+# other site code.
+engines:
+  opengrep:
+    exclude_paths:
+      - "site.note-reader.ts"
+      - "site.docker-context.ts"
+      - "site.precommit.test.ts"
