@@ -6,7 +6,7 @@
 import test, { describe } from "node:test"
 import assert from "node:assert"
 import fs from "node:fs"
-import yaml from "js-yaml"
+import * as yaml from "js-yaml"
 
 // A hook of a pre-commit config as parsed, and the repository entry it sits in.
 type Hook = Record<string, unknown>
